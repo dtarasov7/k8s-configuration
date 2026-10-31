@@ -1,0 +1,20 @@
+---
+- name: Create prepared execution container synchronously
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Start the test executor
+      community.docker.docker_container:
+        name: "{{ item.name }}"
+        image: "{{ item.image }}"
+        command: "{{ item.command }}"
+        network_mode: "{{ item.network_mode }}"
+        volumes: "{{ item.volumes }}"
+        labels:
+          owner: molecule
+          project: k8s-access-manager-test
+        state: started
+      loop: "{{ molecule_yml.platforms }}"
+      loop_control:
+        label: "{{ item.name }}"

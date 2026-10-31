@@ -1,0 +1,27 @@
+---
+k8s_configuration_config:
+  schema_version: 1
+  mode: dry
+  platform: vanilla
+  connection:
+    kubeconfig: ""
+    validate_tls: true
+  management:
+    owner: ansible-access-manager
+    prune: false
+    prune_identities: false
+
+# users/groups/grants deliberately have no defaults: omitted != empty.
+k8s_configuration_export:
+  destination: ./k8s-configuration-export.yml
+k8s_configuration_report_path: ""
+k8s_configuration_no_log: true
+
+# Optional TLS content, resolved by variables on the control node. The API
+# client materializes it in a private temporary directory on the execution host.
+k8s_configuration_hashi_vault_path: ""
+k8s_configuration_hashi_vault_path_password: ""
+k8s_configuration_local_certs_path: "./certs/"
+k8s_configuration_certificates: []
+# Example entries: {name: ca_content, content: "{{ lookup('file', 'ca.pem') }}"}
+# Supported names: ca_content, cert_content, key_content.

@@ -1,0 +1,26 @@
+---
+- name: Destroy only this scenario's executor
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Inspect named test containers
+      community.docker.docker_container_info:
+        name: "{{ item.name }}"
+      loop: "{{ molecule_yml.platforms }}"
+      register: k8s_configuration_test_containers
+
+    - name: Refuse to remove containers without this scenario's label
+      ansible.builtin.assert:
+        quiet: true
+        that:
+          - not item.exists or item.container.Config.Labels.project | default('') == 'k8s-access-manager-test'
+      loop: "{{ k8s_configuration_test_containers.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    - name: Remove the scenario executor
+      community.docker.docker_container:
+        name: "{{ item.name }}"
+        state: absent
+      loop: "{{ molecule_yml.platforms }}"

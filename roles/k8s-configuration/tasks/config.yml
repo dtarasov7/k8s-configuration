@@ -1,0 +1,72 @@
+---
+- name: config.yml - Reconcile access with sanitized failure reporting
+  block:
+    - name: config.yml - Dry, apply or export access
+      k8s_configuration:
+        config: >-
+          {{ k8s_configuration_config | combine({
+               'connection': (k8s_configuration_config.connection | combine(
+                 dict(k8s_configuration_certificates | map(attribute='name') | zip(
+                   k8s_configuration_certificates | map(attribute='content')))))
+             }, recursive=true) }}
+        users: "{{ omit if k8s_configuration_config.mode | default('dry') == 'export' else k8s_configuration_users | default(omit) }}"
+        groups: "{{ omit if k8s_configuration_config.mode | default('dry') == 'export' else k8s_configuration_groups | default(omit) }}"
+        grants: "{{ omit if k8s_configuration_config.mode | default('dry') == 'export' else k8s_configuration_grants | default(omit) }}"
+        export: "{{ k8s_configuration_export }}"
+      register: k8s_configuration_result
+      # Export contains bcrypt hashes needed to recreate local users. Its payload
+      # must never reach stdout, including when the caller explicitly asks for diff.
+      # Other results/diffs are redacted by the module and safe to display.
+      no_log: >-
+        {{ k8s_configuration_config.mode | default('dry') == 'export'
+           or (k8s_configuration_no_log and not ansible_diff_mode) }}
+  rescue:
+    - name: config.yml - Report the sanitized module failure
+      ansible.builtin.fail:
+        msg: "{{ k8s_configuration_result.msg | default('Access reconciliation failed; review the configuration and API connectivity') }}"
+
+- name: config.yml - Display planned additions, changes and removals
+  ansible.builtin.debug:
+    msg:
+      "Планируем добавить": "{{ k8s_configuration_result.plan.planned.add }}"
+      "Планируем изменить": "{{ k8s_configuration_result.plan.planned.change }}"
+      "Планируем удалить": "{{ k8s_configuration_result.plan.planned.remove }}"
+  when: k8s_configuration_result.plan is defined
+
+- name: config.yml - Display sanitized export summary
+  ansible.builtin.debug:
+    msg:
+      users: "{{ k8s_configuration_result.exported.inventory.k8s_configuration_users | length }}"
+      groups: "{{ k8s_configuration_result.exported.inventory.k8s_configuration_groups | length }}"
+      grants: "{{ k8s_configuration_result.exported.inventory.k8s_configuration_grants | length }}"
+      warnings: "{{ k8s_configuration_result.exported.warnings }}"
+  when: k8s_configuration_result.exported is defined
+
+- name: config.yml - Save an explicitly requested sanitized report
+  ansible.builtin.copy:
+    content: "{{ k8s_configuration_result.plan | default({}) | to_nice_yaml }}"
+    dest: "{{ k8s_configuration_report_path }}"
+    mode: "0600"
+  when:
+    - k8s_configuration_report_path | length > 0
+    - k8s_configuration_result.plan is defined
+
+- name: config.yml - Save export as directly importable inventory variables
+  ansible.builtin.copy:
+    content: "{{ k8s_configuration_result.exported.inventory | to_nice_yaml }}"
+    dest: "{{ k8s_configuration_export.destination | default('./k8s-configuration-export.yml') }}"
+    mode: "0600"
+  no_log: true
+  diff: false
+  when: k8s_configuration_result.exported is defined
+
+- name: config.yml - Save an explicitly requested export audit separately
+  ansible.builtin.copy:
+    content: >-
+      {{ k8s_configuration_result.exported | dict2items
+         | rejectattr('key', 'equalto', 'inventory') | list | items2dict | to_nice_yaml }}
+    dest: "{{ k8s_configuration_export.audit_destination }}"
+    mode: "0600"
+  when:
+    - k8s_configuration_result.exported is defined
+    - k8s_configuration_export.audit_destination | default('') | length > 0

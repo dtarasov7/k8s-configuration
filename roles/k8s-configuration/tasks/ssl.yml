@@ -1,0 +1,13 @@
+---
+- name: ssl.yml - Validate pre-resolved certificate content
+  ansible.builtin.assert:
+    that:
+      - item.name in ['ca_content', 'cert_content', 'key_content']
+      - item.content is string
+      - item.content | length > 0
+    fail_msg: TLS entries require a supported name and nonempty content.
+    quiet: true
+  loop: "{{ k8s_configuration_certificates }}"
+  loop_control:
+    label: "{{ item.name | default('TLS content') }}"
+  no_log: true

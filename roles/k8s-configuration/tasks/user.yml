@@ -1,0 +1,5 @@
+---
+- name: user.yml - Use the play execution identity
+  ansible.builtin.debug:
+    msg: No operating-system accounts are required by this API client.
+    verbosity: 1

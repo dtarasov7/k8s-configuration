@@ -1,0 +1,19 @@
+---
+- name: pre-req.yml - Require a single execution host
+  ansible.builtin.assert:
+    that:
+      - ansible_play_hosts_all | length == 1
+      - ansible_version.full is version('2.12', '>=')
+      - k8s_configuration_config is mapping
+      - k8s_configuration_config.connection is defined
+      - k8s_configuration_config.connection.kubeconfig | default('') | length > 0
+    fail_msg: Use one execution host with Python 3.8+ and an explicit kubeconfig.
+    quiet: true
+
+- name: pre-req.yml - Validate optional TLS content structure
+  ansible.builtin.assert:
+    that:
+      - k8s_configuration_certificates is sequence
+      - k8s_configuration_certificates is not string
+    quiet: true
+  no_log: true

@@ -1,0 +1,19 @@
+---
+- name: Converge API access role on RED OS executor
+  hosts: access_executor
+  gather_facts: false
+  vars:
+    k8s_configuration_grants:
+      - id: reader
+        backend: rbac
+        subjects:
+          - kind: User
+            source: external
+            name: kam-test-user
+        roleRef:
+          kind: ClusterRole
+          name: view
+        scope:
+          namespaces: [kam-role-test]
+  roles:
+    - role: k8s-configuration

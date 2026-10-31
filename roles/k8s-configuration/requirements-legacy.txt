@@ -1,0 +1,3 @@
+# Legacy control/execution profile; ansible-core 2.12 is EOL.
+ansible-core==2.12.10
+PyYAML==6.0.2

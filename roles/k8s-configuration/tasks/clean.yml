@@ -1,0 +1,7 @@
+---
+- name: clean.yml - Report temporary artifact lifecycle
+  ansible.builtin.debug:
+    msg: TLS temporary files are removed by the module; reports and cluster resources require explicit management.
+
+- name: clean.yml - Finish the explicitly selected cleanup play
+  ansible.builtin.meta: end_play

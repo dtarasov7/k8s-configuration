@@ -1,0 +1,13 @@
+---
+- name: Verify live authorization and REST reconciliation
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Check actual allowed and denied operations and full resource lifecycle
+      ansible.builtin.command:
+        argv:
+          - "{{ ansible_playbook_python }}"
+          - "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}/tests/live_smoke.py"
+          - verify
+          - "{{ lookup('env', 'KAM_TEST_KUBECONFIG') }}"
+      changed_when: false

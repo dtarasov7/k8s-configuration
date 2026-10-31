@@ -1,0 +1,29 @@
+---
+- name: Manage cluster access
+  hosts: access_executor
+  gather_facts: false
+  vars:
+    k8s_configuration_config:
+      mode: dry
+      platform: vanilla
+      connection:
+        kubeconfig: /etc/ansible/kubeconfigs/cluster.yaml
+        context: cluster
+      management:
+        owner: platform
+        namespaces: [development]
+        include_cluster_scoped: false
+    k8s_configuration_grants:
+      - id: developers
+        backend: rbac
+        subjects:
+          - kind: Group
+            source: external
+            name: developers
+        roleRef:
+          kind: ClusterRole
+          name: edit
+        scope:
+          namespaces: [development]
+  roles:
+    - role: k8s-configuration

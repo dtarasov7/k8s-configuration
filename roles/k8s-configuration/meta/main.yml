@@ -1,0 +1,13 @@
+---
+galaxy_info:
+  role_name: k8s_configuration
+  namespace: platform
+  author: Platform Team
+  description: Manage Kubernetes and Deckhouse access through the REST API
+  license: MIT
+  min_ansible_version: "2.12"
+  platforms:
+    - name: EL
+      versions: ["7", "8", "9"]
+  galaxy_tags: [kubernetes, rbac, deckhouse, security]
+dependencies: []

@@ -1,0 +1,24 @@
+---
+- name: main.yml - Validate execution prerequisites
+  ansible.builtin.import_tasks: pre-req.yml
+  tags: [pre-req]
+
+- name: main.yml - Check runtime dependencies
+  ansible.builtin.import_tasks: install.yml
+  tags: [install]
+
+- name: main.yml - Describe execution identity
+  ansible.builtin.import_tasks: user.yml
+  tags: [user]
+
+- name: main.yml - Validate provided TLS material
+  ansible.builtin.import_tasks: ssl.yml
+  tags: [ssl]
+
+- name: main.yml - Reconcile access
+  ansible.builtin.import_tasks: config.yml
+  tags: [config]
+
+- name: main.yml - Clean local role artifacts
+  ansible.builtin.import_tasks: clean.yml
+  tags: [never, clean]

@@ -1,0 +1,5 @@
+---
+# The repository role template requires literal lowercase filenames at the
+# beginning of each task name (e.g. main.yml - ...).
+skip_list:
+  - name[casing]

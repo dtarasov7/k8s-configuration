@@ -1,0 +1,13 @@
+---
+- name: Prepare isolated kind fixture
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Prepare namespace through REST API on the control node
+      ansible.builtin.command:
+        argv:
+          - "{{ ansible_playbook_python }}"
+          - "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}/tests/live_smoke.py"
+          - setup
+          - "{{ lookup('env', 'KAM_TEST_KUBECONFIG') }}"
+      changed_when: false
