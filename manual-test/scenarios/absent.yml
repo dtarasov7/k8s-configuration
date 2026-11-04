@@ -1,0 +1,12 @@
+---
+manual_test_prune: false
+manual_test_absent_grant:
+  id: temporary-reader
+  backend: rbac
+  state: absent
+  target_name: access-test-temporary
+  scope:
+    namespaces:
+      - access-test-dev
+k8s_configuration_grants: "{{ (manual_test_grants_baseline | rejectattr('id', 'equalto', 'temporary-reader') | list) + [manual_test_absent_grant]\
+  \ }}"

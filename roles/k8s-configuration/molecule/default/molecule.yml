@@ -5,42 +5,41 @@ dependency:
 driver:
   name: docker
 platforms:
-  - name: kam-redos-executor
-    image: "${KAM_MOLECULE_IMAGE:-k8s-access-manager-test-redos:7.3.6}"
-    pre_build_image: true
-    command: sleep infinity
-    network_mode: host
-    volumes:
-      - "${KAM_TEST_KUBECONFIG}:/run/kam/kubeconfig:ro"
-    groups: [access_executor]
+- name: kam-redos-executor
+  image: ${KAM_MOLECULE_IMAGE:-k8s-access-manager-test-redos:7.3.6}
+  pre_build_image: true
+  command: sleep infinity
+  network_mode: host
+  volumes:
+  - ${KAM_TEST_KUBECONFIG}:/run/kam/kubeconfig:ro
+  groups:
+  - access_executor
 provisioner:
   name: ansible
   playbooks:
     create: create.yml
     destroy: destroy.yml
   env:
-    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/.."
+    ANSIBLE_ROLES_PATH: ${MOLECULE_PROJECT_DIRECTORY}/..
   inventory:
     group_vars:
       all:
         ansible_python_interpreter: /usr/bin/python3
-        k8s_configuration_config:
-          mode: apply
-          platform: vanilla
-          connection:
-            kubeconfig: /run/kam/kubeconfig
-          management:
-            owner: kam-molecule
-            namespaces: [kam-role-test]
-            include_cluster_scoped: false
+        k8s_configuration_config_mode: apply
+        k8s_configuration_config_platform: vanilla
+        k8s_configuration_config_connection_kubeconfig: /run/kam/kubeconfig
+        k8s_configuration_config_management_owner: kam-molecule
+        k8s_configuration_config_management_namespaces:
+        - kam-role-test
+        k8s_configuration_config_management_include_cluster_scoped: false
 verifier:
   name: ansible
 scenario:
   test_sequence:
-    - destroy
-    - create
-    - prepare
-    - converge
-    - idempotence
-    - verify
-    - destroy
+  - destroy
+  - create
+  - prepare
+  - converge
+  - idempotence
+  - verify
+  - destroy

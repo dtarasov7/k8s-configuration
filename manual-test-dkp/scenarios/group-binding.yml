@@ -1,0 +1,18 @@
+---
+# Rebind a RoleBinding to existing local and fictional LDAP groups; do not change Group objects.
+manual_dkp_updated_grant:
+  id: audit-logs
+  backend: rbac
+  subjects:
+  - kind: Group
+    name: dkp-access:unused
+  - kind: Group
+    name: ldap:dkp-access:auditors
+  roleRef:
+    kind: Role
+    name: dkp-access-pod-logs
+  scope:
+    namespaces:
+    - dkp-access-dev
+k8s_configuration_grants: '{{ (manual_dkp_grants_baseline | rejectattr(''id'', ''equalto'',
+  ''audit-logs'') | list) + [manual_dkp_updated_grant] }}'

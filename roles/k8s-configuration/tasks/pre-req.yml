@@ -1,13 +1,22 @@
 ---
-- name: pre-req.yml - Require a single execution host
+# EN: ansible_play_hosts_all covers the final hosts/--limit set even with serial: 1.
+# RU: ansible_play_hosts_all содержит итоговый набор hosts/--limit даже при serial: 1.
+- name: pre-req.yml - Require exactly one host after inventory selection and limit
   ansible.builtin.assert:
     that:
       - ansible_play_hosts_all | length == 1
+    fail_msg: >-
+      Exactly one execution host must remain after hosts and --limit;
+      selected {{ ansible_play_hosts_all | length }} hosts. Use --limit to select one host.
+    quiet: true
+  tags: [always]
+
+- name: pre-req.yml - Validate execution prerequisites
+  ansible.builtin.assert:
+    that:
       - ansible_version.full is version('2.12', '>=')
-      - k8s_configuration_config is mapping
-      - k8s_configuration_config.connection is defined
-      - k8s_configuration_config.connection.kubeconfig | default('') | length > 0
-    fail_msg: Use one execution host with Python 3.8+ and an explicit kubeconfig.
+      - k8s_configuration_config_connection_kubeconfig | length > 0
+    fail_msg: Use Python 3.8+, kubectl and an explicit k8s_configuration_config_connection_kubeconfig on the execution host.
     quiet: true
 
 - name: pre-req.yml - Validate optional TLS content structure

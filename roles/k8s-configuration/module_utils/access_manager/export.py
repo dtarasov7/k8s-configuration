@@ -1,15 +1,26 @@
-"""Read-only, loss-aware export with explicit identity dependencies."""
-import base64
-import binascii
+"""EN: Export access assignments while preserving literal subject names.
+RU: Экспортировать назначения с сохранением буквальных имён субъектов.
+"""
 import hashlib
-import re
 
 from .schema import require, mapping, names, boolean, validate_inventory
-from .render import AUTHZ, IDENTITIES, canonical, identity, keys, owned, clean
+from .render import AUTHZ, IDENTITIES, canonical, owned, clean
 from .reconcile import unsupported
 
 
 def validate_export(raw):
+    """EN: Validate export selection and distinct output destinations.
+    RU: Проверить выборку экспорта и различие путей результатов.
+
+    Args:
+        raw (dict): Export filters and destinations / Фильтры экспорта и пути результатов.
+
+    Returns:
+        dict: Validated options with defaults / Проверенные параметры со значениями по умолчанию.
+
+    Raises:
+        AccessError: Invalid mode, filters or conflicting paths / Неверный режим, фильтры или совпадающие пути.
+    """
     mapping(
         raw,
         [
@@ -23,7 +34,6 @@ def validate_export(raw):
             "exclude_controller_generated",
             "destination",
             "audit_destination",
-            "include_identities",
             "allow_partial",
         ],
         "export",
@@ -37,7 +47,6 @@ def validate_export(raw):
         "namespaces": [],
         "include_cluster_scoped": True,
         "exclude_controller_generated": True,
-        "include_identities": True,
         "allow_partial": False,
     }
     cfg.update(raw)
@@ -46,7 +55,7 @@ def validate_export(raw):
         names(cfg[key], "export." + key)
     require(set(cfg["backends"]) <= {"rbac", "deckhouse"}, "Invalid export backend")
     for key in (
-        "include_cluster_scoped", "exclude_controller_generated", "include_identities", "allow_partial"
+        "include_cluster_scoped", "exclude_controller_generated", "allow_partial"
     ):
         boolean(cfg[key], "export." + key)
     for key in ("destination", "audit_destination"):
@@ -63,29 +72,36 @@ def validate_export(raw):
 
 
 def export_state(engine, raw):
+    """EN: Export representable assignments from a prepared snapshot without identities.
+    RU: Экспортировать представимые назначения подготовленного снимка без определений учёток.
+
+    Args:
+        engine (Engine): Session prepared with export=True / Сеанс, подготовленный с export=True.
+        raw (dict): Export filters / Фильтры экспорта.
+
+    Returns:
+        dict: Importable grants, sanitized audit and warnings / Импортируемые grants, аудит без секретов и предупреждения.
+
+    Raises:
+        AccessError: Invalid filters or unsupported selected assignments without allow_partial / Неверные фильтры или неподдерживаемые назначения без allow_partial.
+    """
     cfg = validate_export(raw)
     inventory = {
-        "k8s_configuration_users": [],
-        "k8s_configuration_groups": [],
         "k8s_configuration_grants": [],
     }
-    audit, warnings, dependencies = [], [], set()
+    audit, warnings = [], []
     actual = engine.actual
-    users = [o for o in actual.values() if o["kind"] == "User"]
-    groups = [o for o in actual.values() if o["kind"] == "Group"]
-    selected_identities = {
-        identity(o) for o in users + groups
-        if cfg["include_identities"]
-        and (cfg["mode"] == "scoped" or owned(o, engine.cfg))
-        and not (cfg["exclude_controller_generated"] and engine._is_controller(o))
-    }
-    emails, claims = {}, {}
-    for obj in users:
-        emails.setdefault(obj.get("spec", {}).get("email"), []).append(obj)
-    for obj in groups:
-        claims.setdefault(obj.get("spec", {}).get("name"), []).append(obj)
-
     def audit_entry(obj, problems):
+        """EN: Record a redacted assignment snapshot and its importability.
+        RU: Записать снимок назначения без секретов и признак возможности импорта.
+
+        Args:
+            obj (dict): Selected authorization object / Выбранный объект авторизации.
+            problems (list[str]): Unsupported field names / Имена неподдерживаемых полей.
+
+        Returns:
+            dict: Record appended to the audit list / Запись, добавленная в список аудита.
+        """
         controller = engine._is_controller(obj)
         result = {
             "source": {
@@ -102,27 +118,30 @@ def export_state(engine, raw):
         return result
 
     def subject(sub):
+        """EN: Preserve a subject name and require an explicit ServiceAccount namespace.
+        RU: Сохранить имя субъекта и потребовать явный namespace ServiceAccount.
+
+        Args:
+            sub (dict): Observed binding subject / Субъект наблюдаемого binding.
+
+        Returns:
+            dict: Importable kind/name and optional namespace / Импортируемые kind/name и необязательный namespace.
+
+        Raises:
+            AccessError: ServiceAccount has no namespace / У ServiceAccount не указан namespace.
+        """
         kind, name = sub.get("kind"), sub.get("name")
         result = {"kind": kind, "name": name}
         if kind == "ServiceAccount":
             require(sub.get("namespace"), "Cannot export ServiceAccount without namespace")
-            result.update(source="serviceaccount", namespace=sub["namespace"])
-        else:
-            result["source"] = "external"
-            catalog = emails if kind == "User" else claims
-            matches = catalog.get(name, [])
-            if len(matches) == 1:
-                dependencies.add(identity(matches[0]))
-                result.update(source="static", name=matches[0]["metadata"]["name"])
-            else:
-                warnings.append(
-                    "Identity origin is external or ambiguous; exact claim name preserved"
-                )
+            result["namespace"] = sub["namespace"]
         return result
 
     for key in sorted(actual):
         obj = actual[key]
         kind, ns, name = key
+        # EN: Identity definitions and their secrets never belong to assignment exports.
+        # RU: Определения учёток и их секреты не включаются в экспорт назначений.
         if kind in IDENTITIES:
             continue
         backend = "deckhouse" if kind in AUTHZ else "rbac"
@@ -179,8 +198,6 @@ def export_state(engine, raw):
             s.get("kind") not in ("User", "Group", "ServiceAccount") for s in subjects
         ):
             problems.append("subjects")
-        # Do not emit an importable grant when any dependency cannot be represented.
-        needed_before = set(dependencies)
         if not problems:
             entry["subjects"] = [subject(s) for s in subjects]
             if backend == "rbac":
@@ -198,126 +215,14 @@ def export_state(engine, raw):
             )
         if record["importable"]:
             inventory["k8s_configuration_grants"].append(entry)
-        else:
-            dependencies = needed_before
-
-    # Standalone identities also belong to an inventory snapshot, even if no
-    # selected authorization rule currently refers to them.
-    dependencies.update(selected_identities)
-    # Groups add local users transitively (nested groups are unsupported).
-    for key in list(dependencies):
-        obj = actual[key]
-        if obj["kind"] == "Group":
-            for member in obj.get("spec", {}).get("members", []):
-                user_key = ("User", "", member.get("name"))
-                if member.get("kind") == "User" and user_key in actual:
-                    dependencies.add(user_key)
-    unimportable = set()
-    for key in sorted(dependencies):
-        obj = actual[key]
-        spec = obj.get("spec", {})
-        problems = unsupported(obj)
-        if obj["kind"] == "Group":
-            members = [m.get("name") for m in spec.get("members", []) if m.get("kind") == "User"]
-            if any(("User", "", n) not in actual for n in members):
-                problems.append("unresolved-members")
-            entry = {
-                "name": key[2],
-                "source": "static",
-                "claim_name": spec.get("name"),
-                "members": members,
-            }
-        else:
-            entry = {
-                "name": key[2],
-                "source": "static",
-                "email": spec.get("email"),
-                "password_policy": "on_create",
-            }
-            try:
-                password_hash = base64.b64decode(spec.get("password", ""), validate=True).decode("ascii")
-                if not re.fullmatch(r"\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}", password_hash):
-                    raise ValueError("Not a bcrypt hash")
-                entry["password_hash"] = password_hash
-            except (ValueError, TypeError, UnicodeError, binascii.Error):
-                problems.append("password:not-exportable-bcrypt")
-        if obj.get("metadata", {}).get("annotations", {}).get(
-            "user-authz.deckhouse.io/allow-authorization-rule-collision"
-        ) == "true":
-            entry["allow_collision"] = True
-        record = audit_entry(obj, problems)
-        if record["importable"]:
-            inventory[
-                "k8s_configuration_users" if obj["kind"] == "User" else "k8s_configuration_groups"
-            ].append(entry)
-        else:
-            unimportable.add(key)
-    # An unsupported identity makes all dependent groups/grants non-importable too.
-    changed = True
-    while changed:
-        changed = False
-        for key in dependencies:
-            obj = actual[key]
-            if obj["kind"] == "Group" and key not in unimportable:
-                if any(
-                    ("User", "", m.get("name")) in unimportable
-                    for m in obj.get("spec", {}).get("members", [])
-                ):
-                    unimportable.add(key)
-                    changed = True
-    inventory["k8s_configuration_groups"] = [
-        g
-        for g in inventory["k8s_configuration_groups"]
-        if ("Group", "", g["name"]) not in unimportable
-    ]
-    valid_grants = []
-    for grant in inventory["k8s_configuration_grants"]:
-        bad = any(
-            (s["kind"], "", s["name"]) in unimportable
-            for s in grant["subjects"]
-            if s["source"] == "static"
-        )
-        if not bad:
-            valid_grants.append(grant)
-        else:
-            for record in audit:
-                if (
-                    record["source"]["metadata"]["name"] == grant["target_name"]
-                    and record["source"]["kind"] not in IDENTITIES
-                ):
-                    record["importable"] = False
-                    record["unsupported_fields"].append("unsupported-identity-dependency")
-    inventory["k8s_configuration_grants"] = valid_grants
-    used = {
-        (s["kind"], s["name"])
-        for g in valid_grants
-        for s in g["subjects"]
-        if s["source"] == "static"
-    }
-    inventory["k8s_configuration_groups"] = [
-        g for g in inventory["k8s_configuration_groups"]
-        if ("Group", g["name"]) in used or ("Group", "", g["name"]) in selected_identities
-    ]
-    used.update(("User", m) for g in inventory["k8s_configuration_groups"] for m in g["members"])
-    inventory["k8s_configuration_users"] = [
-        u for u in inventory["k8s_configuration_users"]
-        if ("User", u["name"]) in used or ("User", "", u["name"]) in selected_identities
-    ]
-    for record in audit:
-        meta = record["source"]["metadata"]
-        key = (record["source"]["kind"], meta.get("namespace", ""), meta["name"])
-        if key in unimportable:
-            record["importable"] = False
     require(
         cfg["allow_partial"] or all(r["importable"] for r in audit),
-        "Export contains unsupported resources or identities; no inventory file was written. "
+        "Export contains unsupported access assignments; no inventory file was written. "
         "Use export.allow_partial with audit_destination only after reviewing the limitations",
     )
     validate_inventory(
         engine.cfg,
-        inventory["k8s_configuration_users"],
-        inventory["k8s_configuration_groups"],
-        inventory["k8s_configuration_grants"],
+        grants=inventory["k8s_configuration_grants"],
     )
     return {
         "schema_version": 1,

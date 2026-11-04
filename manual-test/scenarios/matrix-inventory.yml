@@ -1,0 +1,8 @@
+---
+manual_test_mode: matrix
+k8s_configuration_matrix_source: inventory
+k8s_configuration_matrix_scope: cluster
+k8s_configuration_matrix_namespaces:
+- access-test-dev
+- access-test-stage
+k8s_configuration_matrix_include_cluster_scoped: true

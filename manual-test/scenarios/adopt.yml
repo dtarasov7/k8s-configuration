@@ -1,0 +1,22 @@
+---
+# Requires an existing manual-binding.yml and its exact UID supplied as manual_test_adopt_uid.
+manual_test_adoption:
+  - group: rbac.authorization.k8s.io
+    resource: rolebindings
+    namespace: access-test-dev
+    name: access-test-manual-reader
+    uid: "{{ manual_test_adopt_uid }}"
+manual_test_adopted_grant:
+  id: manual-adopted
+  backend: rbac
+  subjects:
+    - kind: User
+      name: access-test:manual
+  roleRef:
+    kind: ClusterRole
+    name: view
+  scope:
+    namespaces:
+      - access-test-dev
+  target_name: access-test-manual-reader
+k8s_configuration_grants: "{{ manual_test_grants_baseline + [manual_test_adopted_grant] }}"

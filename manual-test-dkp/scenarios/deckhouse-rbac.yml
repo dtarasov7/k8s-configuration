@@ -1,0 +1,15 @@
+---
+manual_dkp_granular_grant:
+  id: deckhouse-viewer
+  backend: rbac
+  subjects:
+  - kind: User
+    name: dkp-access:granular-reader
+  roleRef:
+    kind: ClusterRole
+    name: d8:use:role:viewer
+  scope:
+    namespaces:
+    - dkp-access-dev
+k8s_configuration_grants: '{{ manual_dkp_grants_baseline + [manual_dkp_granular_grant]
+  }}'

@@ -3,7 +3,7 @@
   hosts: localhost
   gather_facts: false
   tasks:
-    - name: Prepare namespace through REST API on the control node
+    - name: Prepare namespace through kubectl on the control node
       ansible.builtin.command:
         argv:
           - "{{ ansible_playbook_python }}"

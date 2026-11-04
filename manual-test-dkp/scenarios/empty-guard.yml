@@ -1,0 +1,4 @@
+---
+manual_dkp_prune: true
+manual_dkp_allow_empty: false
+k8s_configuration_grants: []

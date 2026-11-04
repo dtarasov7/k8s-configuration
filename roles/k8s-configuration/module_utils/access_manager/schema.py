@@ -1,18 +1,72 @@
-"""Strict input validation. No API writes or credential-bearing errors."""
+"""EN: Validate inputs without API calls or credential-bearing errors.
+RU: Проверка входных данных без запросов API и раскрытия учётных данных.
+"""
 import copy
 import re
 
 
 class AccessError(Exception):
-    """An intentionally public, credential-free diagnostic."""
+    """EN: Expose an intentionally public, credential-free diagnostic.
+    RU: Публичная диагностическая ошибка без учётных данных.
+    """
+
+
+def unexpected_error(exc):
+    """EN: Report the exception type and code location without its message.
+    RU: Сообщить тип исключения и место в коде без его сообщения.
+
+    Args:
+        exc (Exception): Caught exception / Перехваченное исключение.
+
+    Returns:
+        str: Sanitized diagnostic / Безопасная диагностика.
+    """
+    location = "unknown location"
+    trace = exc.__traceback__
+    while trace:
+        filename = trace.tb_frame.f_code.co_filename
+        if "/access_manager/" in filename or filename.endswith("/k8s_configuration.py"):
+            location = "%s:%s" % (filename.rsplit("/", 1)[-1], trace.tb_lineno)
+        trace = trace.tb_next
+    return "Unexpected access manager failure (%s at %s); exception details suppressed" % (
+        type(exc).__name__, location,
+    )
 
 
 def require(condition, message):
+    """EN: Reject a failed invariant with a public diagnostic.
+    RU: Отклонить нарушенное условие с публичной диагностикой.
+
+    Args:
+        condition (Any): Required truth value / Проверяемое условие.
+        message (str): Credential-free error / Ошибка без секретов.
+
+    Returns:
+        None: No change on success / При успехе ничего не изменяет.
+
+    Raises:
+        AccessError: The condition is false / Условие ложно.
+    """
     if not condition:
         raise AccessError(message)
 
 
 def mapping(value, allowed, where, required=()):
+    """EN: Validate mapping keys and required fields.
+    RU: Проверить ключи словаря и обязательные поля.
+
+    Args:
+        value (Any): Candidate mapping / Проверяемый словарь.
+        allowed (Iterable[str]): Accepted keys / Допустимые ключи.
+        where (str): Diagnostic field name / Имя поля для диагностики.
+        required (Iterable[str]): Mandatory keys / Обязательные ключи.
+
+    Returns:
+        dict: Original mapping / Исходный словарь.
+
+    Raises:
+        AccessError: Wrong type, missing or unknown keys / Неверный тип, пропущенные или неизвестные ключи.
+    """
     require(isinstance(value, dict), "%s must be a mapping" % where)
     require(not set(value) - set(allowed), "%s has unsupported fields" % where)
     require(set(required) <= set(value), "%s is missing required fields" % where)
@@ -25,6 +79,20 @@ def string(value, where):
 
 
 def names(value, where, empty=True):
+    """EN: Validate a unique list of nonempty strings.
+    RU: Проверить уникальный список непустых строк.
+
+    Args:
+        value (Any): Candidate list / Проверяемый список.
+        where (str): Diagnostic field name / Имя поля для диагностики.
+        empty (bool): Whether [] is allowed / Допустим ли пустой список.
+
+    Returns:
+        list[str]: Original list / Исходный список.
+
+    Raises:
+        AccessError: Invalid type, empty item or duplicate / Неверный тип, пустой элемент или повтор.
+    """
     require(isinstance(value, list), "%s must be a list" % where)
     require(empty or bool(value), "%s must not be empty" % where)
     for item in value:
@@ -71,12 +139,11 @@ DEFAULTS = {
     "schema_version": 1,
     "mode": "dry",
     "platform": "vanilla",
-    "connection": {"validate_tls": True, "timeout_seconds": 30, "retries": 2},
+    "connection": {"kubectl": "kubectl", "validate_tls": True, "timeout_seconds": 30, "retries": 2},
     "deckhouse": {"basic_authz": False, "profiles": {}},
     "management": {
         "owner": "ansible-access-manager",
         "prune": False,
-        "prune_identities": False,
         "adoption": [],
         "label_domain": "access-manager.ansible.local",
         "namespaces": None,
@@ -99,11 +166,24 @@ DEFAULTS = {
     },
     "server_validation": False,
     "wait_timeout_seconds": 60,
-    "access_checks": [],
 }
 
 
 def object_ref(value, where, uid=False):
+    """EN: Validate an API object reference, optionally bound to a UID.
+    RU: Проверить ссылку на объект API, при необходимости с UID.
+
+    Args:
+        value (dict): Resource reference / Ссылка на ресурс.
+        where (str): Diagnostic context / Контекст диагностики.
+        uid (bool): Require an object UID / Требовать UID объекта.
+
+    Returns:
+        None: Validation only / Только проверка.
+
+    Raises:
+        AccessError: Invalid reference fields / Неверные поля ссылки.
+    """
     mapping(
         value,
         ["group", "resource", "namespace", "name", "uid"],
@@ -118,12 +198,25 @@ def object_ref(value, where, uid=False):
 
 
 def validate_config(raw):
+    """EN: Validate settings and merge defaults into an independent configuration.
+    RU: Проверить настройки и объединить значения по умолчанию в отдельную конфигурацию.
+
+    Args:
+        raw (dict): Module settings / Настройки модуля.
+
+    Returns:
+        dict: Validated configuration / Проверенная конфигурация.
+
+    Raises:
+        AccessError: Unsupported fields or invalid settings / Неизвестные поля или неверные настройки.
+    """
     mapping(raw, list(DEFAULTS) + ["expected_plan_digest"], "config")
     cfg = copy.deepcopy(DEFAULTS)
     for key, value in raw.items():
         if key in ("connection", "deckhouse", "management", "safety"):
             allowed = {
                 "connection": [
+                    "kubectl",
                     "kubeconfig",
                     "context",
                     "validate_tls",
@@ -148,9 +241,12 @@ def validate_config(raw):
     # Keep existing inventories working; dry is the public name of this mode.
     if cfg["mode"] == "plan":
         cfg["mode"] = "dry"
-    require(cfg["mode"] in ("dry", "apply", "export"), "Invalid mode")
+    require(cfg["mode"] in ("dry", "apply", "export", "matrix"), "Invalid mode")
     require(cfg["platform"] in ("vanilla", "deckhouse"), "Invalid platform")
     string(cfg["connection"].get("kubeconfig"), "connection.kubeconfig")
+    string(cfg["connection"]["kubectl"], "connection.kubectl")
+    if "context" in cfg["connection"]:
+        string(cfg["connection"]["context"], "connection.context")
     for key in ("validate_tls",):
         boolean(cfg["connection"][key], "connection." + key)
     integer(cfg["connection"]["timeout_seconds"], "timeout_seconds", 1, 3600)
@@ -165,7 +261,7 @@ def validate_config(raw):
         "Invalid management.owner",
     )
     dns(mg["label_domain"], "management.label_domain")
-    for key in ("prune", "prune_identities", "include_cluster_scoped"):
+    for key in ("prune", "include_cluster_scoped"):
         boolean(mg[key], "management." + key)
     if mg["namespaces"] is not None:
         names(mg["namespaces"], "management.namespaces")
@@ -187,29 +283,22 @@ def validate_config(raw):
         object_ref(ref, "protected_objects")
     boolean(cfg["deckhouse"]["basic_authz"], "deckhouse.basic_authz")
     mapping(cfg["deckhouse"]["profiles"], cfg["deckhouse"]["profiles"], "deckhouse.profiles")
-    require(isinstance(cfg["access_checks"], list), "access_checks must be a list")
-    for check in cfg["access_checks"]:
-        mapping(
-            check,
-            ["user", "groups", "resourceAttributes", "allowed"],
-            "access_check",
-            ["user", "resourceAttributes", "allowed"],
-        )
-        string(check["user"], "access_check.user")
-        names(check.get("groups", []), "access_check.groups")
-        boolean(check["allowed"], "access_check.allowed")
-        mapping(
-            check["resourceAttributes"],
-            ["namespace", "verb", "group", "version", "resource", "subresource", "name"],
-            "resourceAttributes",
-            ["verb", "resource"],
-        )
-        for v in check["resourceAttributes"].values():
-            require(isinstance(v, str), "resourceAttributes values must be strings")
     return cfg
 
 
 def validate_selector(selector):
+    """EN: Validate the supported Kubernetes label selector syntax.
+    RU: Проверить поддерживаемый синтаксис селектора меток Kubernetes.
+
+    Args:
+        selector (dict): matchLabels/matchExpressions / Условия matchLabels/matchExpressions.
+
+    Returns:
+        None: Validation only / Только проверка.
+
+    Raises:
+        AccessError: Invalid keys, operator or values / Неверные ключи, оператор или значения.
+    """
     mapping(selector, ["matchLabels", "matchExpressions"], "namespace_selector")
     require(
         bool(selector.get("matchLabels")) or bool(selector.get("matchExpressions")),
@@ -236,174 +325,121 @@ def validate_selector(selector):
                 require(not expr.get("values"), "Exists/DoesNotExist forbids values")
 
 
-def validate_inventory(cfg, users=None, groups=None, grants=None):
-    sections = {"users": users, "groups": groups, "grants": grants}
-    result = {}
-    for section, entries in sections.items():
-        require(
-            entries is None or isinstance(entries, list), section + " must be a list or omitted"
-        )
-        result[section] = copy.deepcopy(entries)
-        seen = set()
-        for entry in entries or []:
-            fields = {
-                "users": [
-                    "name",
-                    "source",
-                    "email",
-                    "password_hash",
-                    "password_policy",
-                    "state",
-                    "allow_collision",
-                ],
-                "groups": ["name", "source", "claim_name", "members", "state", "allow_collision"],
-                "grants": [
-                    "id",
-                    "backend",
-                    "subjects",
-                    "roleRef",
-                    "scope",
-                    "accessLevel",
-                    "options",
-                    "state",
-                    "target_name",
-                ],
-            }[section]
-            mapping(entry, fields, section)
-            ident = entry.get("id" if section == "grants" else "name")
-            dns(ident, section + " identifier")
-            require(ident not in seen, "Duplicate identifier in " + section)
-            seen.add(ident)
-            require(entry.get("state", "present") in ("present", "absent"), "Invalid state")
-            absent = entry.get("state") == "absent"
-            if section != "grants":
-                require(cfg["platform"] == "deckhouse", "Local identities require Deckhouse")
-                require(entry.get("source") == "static", "Local identities require source: static")
-                boolean(entry.get("allow_collision", False), "allow_collision")
-                if absent:
-                    continue
-            if section == "users":
-                email = string(entry.get("email"), "user.email")
-                require(email == email.lower() and "@" in email, "Local email must be lowercase")
-                require(
-                    entry.get("password_policy", "on_create") in ("on_create", "managed"),
-                    "Invalid password_policy",
-                )
-                if entry.get("password_hash") is not None:
-                    require(
-                        isinstance(entry["password_hash"], str)
-                        and re.fullmatch(
-                            r"\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}", entry["password_hash"]
-                        ),
-                        "password_hash must be a raw bcrypt hash",
-                    )
-            elif section == "groups":
-                string(entry.get("claim_name"), "group.claim_name")
-                names(entry.get("members"), "group.members")
-            else:
-                require(entry.get("backend") in ("rbac", "deckhouse"), "Invalid backend")
-                if entry["backend"] == "deckhouse":
-                    require(
-                        cfg["platform"] == "deckhouse" and cfg["deckhouse"]["basic_authz"],
-                        "Basic Deckhouse backend is not enabled",
-                    )
-                scope = mapping(
-                    entry.get("scope"),
-                    ["cluster", "namespaces", "namespace_selector", "include_system_namespaces"],
-                    "scope",
-                )
-                require(
-                    sum(k in scope for k in ("cluster", "namespaces", "namespace_selector")) == 1,
-                    "scope requires exactly one variant",
-                )
-                if "cluster" in scope:
-                    require(scope["cluster"] is True, "scope.cluster must be true")
-                    if entry["backend"] == "deckhouse":
-                        boolean(
-                            scope.get("include_system_namespaces"),
-                            "scope.include_system_namespaces",
-                        )
-                if "namespaces" in scope:
-                    names(scope["namespaces"], "scope.namespaces", False)
-                    for ns in scope["namespaces"]:
-                        dns(ns, "namespace")
-                if "namespace_selector" in scope:
-                    require(
-                        entry["backend"] == "deckhouse", "RBAC does not support namespace_selector"
-                    )
-                    validate_selector(scope["namespace_selector"])
-                if "include_system_namespaces" in scope:
-                    require(
-                        entry["backend"] == "deckhouse" and scope.get("cluster") is True,
-                        "include_system_namespaces requires a Deckhouse cluster scope",
-                    )
-                if "target_name" in entry:
-                    if entry["backend"] == "rbac":
-                        path_name(entry["target_name"], "target_name")
-                    else:
-                        dns(entry["target_name"], "target_name")
-                    require(
-                        len(scope.get("namespaces", [])) <= 1,
-                        "target_name requires a single target",
-                    )
-                if absent:
-                    continue
-                subs = entry.get("subjects")
-                require(isinstance(subs, list) and bool(subs), "subjects must not be empty")
-                for sub in subs:
-                    mapping(
-                        sub,
-                        ["kind", "source", "name", "namespace"],
-                        "subject",
-                        ["kind", "source", "name"],
-                    )
-                    string(sub["name"], "subject.name")
-                    require(
-                        sub["kind"] in ("User", "Group", "ServiceAccount"), "Invalid subject kind"
-                    )
-                    if sub["kind"] == "ServiceAccount":
-                        require(
-                            sub["source"] == "serviceaccount",
-                            "ServiceAccount source must be serviceaccount",
-                        )
-                        dns(sub.get("namespace"), "ServiceAccount namespace")
-                        dns(sub["name"], "ServiceAccount name")
-                    else:
-                        require(
-                            sub["source"] in ("static", "external") and "namespace" not in sub,
-                            "Invalid User/Group subject",
-                        )
-                if entry["backend"] == "rbac":
-                    require(
-                        not set(entry) & {"accessLevel", "options"},
-                        "RBAC cannot use accessLevel/options",
-                    )
-                    ref = mapping(
-                        entry.get("roleRef"), ["kind", "name"], "roleRef", ["kind", "name"]
-                    )
-                    path_name(ref["name"], "roleRef.name")
-                    require(ref["kind"] in ("Role", "ClusterRole"), "Invalid roleRef.kind")
-                    require(
-                        ref["kind"] != "Role" or "namespaces" in scope,
-                        "Role requires namespace scope",
-                    )
-                else:
-                    require("roleRef" not in entry, "Deckhouse cannot use roleRef")
-                    levels = ["User", "PrivilegedUser", "Editor", "Admin"]
-                    if "namespaces" not in scope:
-                        levels += ["ClusterEditor", "ClusterAdmin", "SuperAdmin"]
-                    require(entry.get("accessLevel") in levels, "Invalid accessLevel for scope")
-                    mapping(entry.get("options", {}), ["allowScale", "portForwarding"], "options")
-                    for v in entry.get("options", {}).values():
-                        boolean(v, "option")
-    for section, field in [("users", "email"), ("groups", "claim_name")]:
-        values = [x[field] for x in result[section] or [] if x.get("state") != "absent"]
-        require(len(values) == len(set(values)), "Duplicate identity in " + section)
-    user_names = {x["name"] for x in result["users"] or [] if x.get("state") != "absent"}
-    for group in result["groups"] or []:
-        if group.get("state") != "absent":
+def validate_inventory(cfg, grants=None):
+    """EN: Validate access assignments for existing subjects.
+    RU: Проверить назначения доступа существующим субъектам.
+
+    Args:
+        cfg (dict): Validated settings / Проверенные настройки.
+        grants (list[dict] | None): Assignments; None leaves unmanaged / Назначения; None исключает управление.
+
+    Returns:
+        dict: Copied grants section / Копия раздела grants.
+
+    Raises:
+        AccessError: Invalid assignment or incompatible backend / Неверное назначение или несовместимый backend.
+    """
+    require(grants is None or isinstance(grants, list), "grants must be a list or omitted")
+    result = {"grants": copy.deepcopy(grants)}
+    seen = set()
+    for entry in result["grants"] or []:
+        mapping(entry, ["id", "backend", "subjects", "roleRef", "scope", "accessLevel",
+                        "options", "state", "target_name"], "grants")
+        ident = entry.get("id")
+        dns(ident, "grants identifier")
+        require(ident not in seen, "Duplicate identifier in grants")
+        seen.add(ident)
+        require(entry.get("state", "present") in ("present", "absent"), "Invalid state")
+        absent = entry.get("state") == "absent"
+        require(entry.get("backend") in ("rbac", "deckhouse"), "Invalid backend")
+        if entry["backend"] == "deckhouse":
             require(
-                set(group["members"]) <= user_names,
-                "Group member must reference a present inventory User",
+                cfg["platform"] == "deckhouse" and cfg["deckhouse"]["basic_authz"],
+                "Basic Deckhouse backend is not enabled",
             )
+        scope = mapping(
+            entry.get("scope"),
+            ["cluster", "namespaces", "namespace_selector", "include_system_namespaces"],
+            "scope",
+        )
+        require(
+            sum(k in scope for k in ("cluster", "namespaces", "namespace_selector")) == 1,
+            "scope requires exactly one variant",
+        )
+        if "cluster" in scope:
+            require(scope["cluster"] is True, "scope.cluster must be true")
+            if entry["backend"] == "deckhouse":
+                boolean(
+                    scope.get("include_system_namespaces"),
+                    "scope.include_system_namespaces",
+                )
+        if "namespaces" in scope:
+            names(scope["namespaces"], "scope.namespaces", False)
+            for ns in scope["namespaces"]:
+                dns(ns, "namespace")
+        if "namespace_selector" in scope:
+            require(
+                entry["backend"] == "deckhouse", "RBAC does not support namespace_selector"
+            )
+            validate_selector(scope["namespace_selector"])
+        if "include_system_namespaces" in scope:
+            require(
+                entry["backend"] == "deckhouse" and scope.get("cluster") is True,
+                "include_system_namespaces requires a Deckhouse cluster scope",
+            )
+        if "target_name" in entry:
+            if entry["backend"] == "rbac":
+                path_name(entry["target_name"], "target_name")
+            else:
+                dns(entry["target_name"], "target_name")
+            require(
+                len(scope.get("namespaces", [])) <= 1,
+                "target_name requires a single target",
+            )
+        if absent:
+            continue
+        subs = entry.get("subjects")
+        require(isinstance(subs, list) and bool(subs), "subjects must not be empty")
+        for sub in subs:
+            mapping(
+                sub,
+                ["kind", "name", "namespace"],
+                "subject",
+                ["kind", "name"],
+            )
+            string(sub["name"], "subject.name")
+            require(
+                sub["kind"] in ("User", "Group", "ServiceAccount"), "Invalid subject kind"
+            )
+            if sub["kind"] == "ServiceAccount":
+                dns(sub.get("namespace"), "ServiceAccount namespace")
+                dns(sub["name"], "ServiceAccount name")
+            else:
+                require(
+                    "namespace" not in sub,
+                    "Invalid User/Group subject",
+                )
+        if entry["backend"] == "rbac":
+            require(
+                not set(entry) & {"accessLevel", "options"},
+                "RBAC cannot use accessLevel/options",
+            )
+            ref = mapping(
+                entry.get("roleRef"), ["kind", "name"], "roleRef", ["kind", "name"]
+            )
+            path_name(ref["name"], "roleRef.name")
+            require(ref["kind"] in ("Role", "ClusterRole"), "Invalid roleRef.kind")
+            require(
+                ref["kind"] != "Role" or "namespaces" in scope,
+                "Role requires namespace scope",
+            )
+        else:
+            require("roleRef" not in entry, "Deckhouse cannot use roleRef")
+            levels = ["User", "PrivilegedUser", "Editor", "Admin"]
+            if "namespaces" not in scope:
+                levels += ["ClusterEditor", "ClusterAdmin", "SuperAdmin"]
+            require(entry.get("accessLevel") in levels, "Invalid accessLevel for scope")
+            mapping(entry.get("options", {}), ["allowScale", "portForwarding"], "options")
+            for v in entry.get("options", {}).values():
+                boolean(v, "option")
     return result

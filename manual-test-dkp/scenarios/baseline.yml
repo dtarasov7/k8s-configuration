@@ -1,0 +1,2 @@
+---
+k8s_configuration_grants: '{{ manual_dkp_grants_baseline }}'

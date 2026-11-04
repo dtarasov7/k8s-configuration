@@ -1,5 +1,6 @@
-"""Pure rendering and canonical, redacted projections."""
-import base64
+"""EN: Render manifests and build deterministic, redacted projections.
+RU: Формировать манифесты и детерминированные представления без секретов.
+"""
 import copy
 import hashlib
 import json
@@ -12,16 +13,23 @@ KINDS = (
     "ClusterRoleBinding",
     "AuthorizationRule",
     "ClusterAuthorizationRule",
-    "User",
-    "Group",
 )
 IDENTITIES = ("User", "Group")
 AUTHZ = ("AuthorizationRule", "ClusterAuthorizationRule")
-SECTION = {k: ("users" if k == "User" else "groups" if k == "Group" else "grants") for k in KINDS}
+SECTION = {k: "grants" for k in KINDS}
 OPTIONAL = ("namespaceSelector", "allowAccessToSystemNamespaces", "limitNamespaces")
 
 
 def canonical(value):
+    """EN: Serialize JSON consistently for ordering and digests.
+    RU: Сериализовать JSON единообразно для сортировки и отпечатков.
+
+    Args:
+        value (Any): JSON-compatible value / JSON-совместимое значение.
+
+    Returns:
+        str: Stable JSON representation / Стабильное JSON-представление.
+    """
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
@@ -30,6 +38,15 @@ def sorted_items(items):
 
 
 def identity(obj):
+    """EN: Extract the kind/namespace/name object key.
+    RU: Получить ключ объекта kind/namespace/name.
+
+    Args:
+        obj (dict): Kubernetes object with metadata / Объект Kubernetes с metadata.
+
+    Returns:
+        tuple[str, str, str]: Namespace is empty for cluster scope / Для кластерной области namespace пуст.
+    """
     meta = obj["metadata"]
     return (obj["kind"], meta.get("namespace", ""), meta["name"])
 
@@ -43,6 +60,16 @@ def keys(cfg):
 
 
 def owned(obj, cfg):
+    """EN: Check both ownership labels for the configured owner.
+    RU: Проверить обе метки принадлежности настроенному владельцу.
+
+    Args:
+        obj (dict): Observed object / Наблюдаемый объект.
+        cfg (dict): Role settings / Настройки роли.
+
+    Returns:
+        bool: Whether this role owns the object / Принадлежит ли объект этой роли.
+    """
     labels = obj.get("metadata", {}).get("labels", {})
     k = keys(cfg)
     return (
@@ -52,6 +79,15 @@ def owned(obj, cfg):
 
 
 def controller_owned(obj):
+    """EN: Detect standard controller, Helm and Deckhouse ownership markers.
+    RU: Обнаружить стандартные признаки управления контроллером, Helm или Deckhouse.
+
+    Args:
+        obj (dict): Observed object / Наблюдаемый объект.
+
+    Returns:
+        bool: Whether a known marker is present / Есть ли известный признак управления.
+    """
     meta = obj.get("metadata", {})
     if meta.get("ownerReferences"):
         return True
@@ -67,6 +103,15 @@ def controller_owned(obj):
 
 
 def resource_ref(obj):
+    """EN: Build an API resource reference including the observed UID.
+    RU: Сформировать ссылку на API-ресурс с наблюдаемым UID.
+
+    Args:
+        obj (dict): Kubernetes object / Объект Kubernetes.
+
+    Returns:
+        dict: Group, kind, namespace, name and UID / Группа API, kind, namespace, имя и UID.
+    """
     version = obj["apiVersion"]
     kind, ns, name = identity(obj)
     return {
@@ -79,12 +124,39 @@ def resource_ref(obj):
 
 
 def generated_name(cfg, grant, kind, ns):
+    """EN: Derive a stable binding name from owner, grant and scope.
+    RU: Получить стабильное имя binding из владельца, назначения и области.
+
+    Args:
+        cfg (dict): Owner settings / Настройки владельца.
+        grant (dict): Assignment with id / Назначение с id.
+        kind (str): Resulting resource kind / Kind создаваемого ресурса.
+        ns (str): Namespace or empty cluster scope / Namespace или пустая кластерная область.
+
+    Returns:
+        str: Deterministic API object name / Детерминированное имя объекта API.
+    """
     raw = "\0".join([cfg["management"]["owner"], grant["id"], kind, ns])
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
     return "am-" + grant["id"][:46].rstrip("-.") + "-" + digest
 
 
 def make(cfg, version, kind, name, ns, section, grant_id=None):
+    """EN: Create a manifest skeleton with ownership and provenance metadata.
+    RU: Создать основу манифеста с метками владельца и происхождения.
+
+    Args:
+        cfg (dict): Ownership settings / Настройки принадлежности.
+        version (str): API version / Версия API.
+        kind (str): Resource kind / Kind ресурса.
+        name (str): Object name / Имя объекта.
+        ns (str): Namespace or empty / Namespace или пустая строка.
+        section (str): Inventory section / Раздел inventory.
+        grant_id (str | None): Optional assignment id / Необязательный id назначения.
+
+    Returns:
+        dict: Manifest skeleton / Основа манифеста.
+    """
     k = keys(cfg)
     meta = {
         "name": name,
@@ -103,12 +175,21 @@ def make(cfg, version, kind, name, ns, section, grant_id=None):
 
 
 def render(cfg, inventory, versions):
-    users = {x["name"]: x for x in inventory["users"] or [] if x.get("state") != "absent"}
-    groups = {x["name"]: x for x in inventory["groups"] or [] if x.get("state") != "absent"}
-    local = {("User", x["email"]) for x in users.values()} | {
-        ("Group", x["claim_name"]) for x in groups.values()
-    }
-    desired, absent, policies = {}, set(), {}
+    """EN: Convert validated inventory into desired objects without API calls.
+    RU: Преобразовать проверенный inventory в целевые объекты без запросов API.
+
+    Args:
+        cfg (dict): Role settings / Настройки роли.
+        inventory (dict): Validated grants / Проверенные назначения.
+        versions (dict[str, str]): Kind-to-version mapping / Соответствие kind версиям API.
+
+    Returns:
+        tuple[dict, set]: Desired assignments and absent keys / Целевые назначения и ключи отсутствующих объектов.
+
+    Raises:
+        AccessError: Duplicate target objects or effective subjects / Повторяющиеся целевые объекты или субъекты.
+    """
+    desired, absent = {}, set()
 
     def add(obj, is_absent=False):
         key = identity(obj)
@@ -118,29 +199,6 @@ def render(cfg, inventory, versions):
         else:
             desired[key] = obj
 
-    for section, kind in [("users", "User"), ("groups", "Group")]:
-        for entry in inventory[section] or []:
-            obj = make(cfg, versions[kind], kind, entry["name"], "", section)
-            if entry.get("allow_collision"):
-                obj["metadata"]["annotations"][
-                    "user-authz.deckhouse.io/allow-authorization-rule-collision"
-                ] = "true"
-            if entry.get("state") == "absent":
-                add(obj, True)
-                continue
-            if kind == "User":
-                obj["spec"] = {"email": entry["email"]}
-                if entry.get("password_hash"):
-                    obj["spec"]["password"] = base64.b64encode(
-                        entry["password_hash"].encode("ascii")
-                    ).decode("ascii")
-                policies[identity(obj)] = entry.get("password_policy", "on_create")
-            else:
-                obj["spec"] = {
-                    "name": entry["claim_name"],
-                    "members": [{"kind": "User", "name": n} for n in sorted(entry["members"])],
-                }
-            add(obj)
     for grant in inventory["grants"] or []:
         basic = grant["backend"] == "deckhouse"
         scope = grant["scope"]
@@ -152,19 +210,7 @@ def render(cfg, inventory, versions):
         )
         subjects = []
         for sub in grant.get("subjects", []):
-            actual = {k: v for k, v in sub.items() if k != "source"}
-            if sub["source"] == "static":
-                catalog = users if sub["kind"] == "User" else groups
-                require(
-                    sub["name"] in catalog, "Static subject must reference a present local identity"
-                )
-                actual["name"] = catalog[sub["name"]][
-                    "email" if sub["kind"] == "User" else "claim_name"
-                ]
-            elif sub["source"] == "external":
-                require(
-                    (sub["kind"], sub["name"]) not in local, "Local/external identity collision"
-                )
+            actual = copy.deepcopy(sub)
             if not basic and sub["kind"] != "ServiceAccount":
                 actual["apiGroup"] = "rbac.authorization.k8s.io"
             subjects.append(actual)
@@ -194,11 +240,19 @@ def render(cfg, inventory, versions):
                 obj["subjects"] = sorted_items(subjects)
                 obj["roleRef"] = dict(grant["roleRef"], apiGroup="rbac.authorization.k8s.io")
             add(obj)
-    return desired, absent, policies
+    return desired, absent
 
 
 def clean(obj):
-    """Allowlist public fields; never expose passwords, arbitrary annotations or status."""
+    """EN: Project allowlisted public fields while excluding passwords and arbitrary metadata.
+    RU: Выбрать разрешённые публичные поля без паролей и произвольных metadata.
+
+    Args:
+        obj (dict | None): API object or absence / Объект API или отсутствие.
+
+    Returns:
+        dict | None: Independent sanitized projection / Отдельное представление без секретов.
+    """
     if obj is None:
         return None
     result = {k: copy.deepcopy(obj[k]) for k in ("apiVersion", "kind") if k in obj}
@@ -229,6 +283,15 @@ def clean(obj):
 
 
 def normalized(obj):
+    """EN: Copy an object and normalize unordered membership and subject fields.
+    RU: Скопировать объект и нормализовать неупорядоченные поля членства и субъектов.
+
+    Args:
+        obj (dict): API or desired object / Наблюдаемый или целевой объект.
+
+    Returns:
+        dict: Comparable copy with canonical subjects/members / Копия с нормализованными subjects/members для сравнения.
+    """
     result = copy.deepcopy(obj)
 
     def subjects(items, rbac=False):
@@ -256,6 +319,16 @@ def normalized(obj):
 
 
 def selector_matches(selector, labels):
+    """EN: Evaluate a validated Kubernetes label selector.
+    RU: Проверить соответствие проверенному селектору меток Kubernetes.
+
+    Args:
+        selector (dict): Validated selector / Проверенный селектор.
+        labels (dict[str, str]): Namespace labels / Метки namespace.
+
+    Returns:
+        bool: Whether all selector conditions match / Выполняются ли все условия селектора.
+    """
     if any(labels.get(k) != v for k, v in selector.get("matchLabels", {}).items()):
         return False
     for expr in selector.get("matchExpressions", []):

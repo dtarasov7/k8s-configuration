@@ -1,0 +1,22 @@
+---
+manual_dkp_adoption:
+- group: rbac.authorization.k8s.io
+  resource: rolebindings
+  namespace: dkp-access-dev
+  name: dkp-access-manual-reader
+  uid: '{{ manual_dkp_adopt_uid }}'
+manual_dkp_adopted_grant:
+  id: manual-adopted
+  backend: rbac
+  subjects:
+  - kind: User
+    name: dkp-access:manual
+  roleRef:
+    kind: ClusterRole
+    name: view
+  scope:
+    namespaces:
+    - dkp-access-dev
+  target_name: dkp-access-manual-reader
+k8s_configuration_grants: '{{ manual_dkp_grants_baseline + [manual_dkp_adopted_grant]
+  }}'

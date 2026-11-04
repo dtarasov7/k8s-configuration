@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from support import FakeAPI, config, grant, engine, HASH
+from support import FakeAPI, config, grant, engine
 from access_manager.schema import AccessError, validate_config, validate_inventory
 from access_manager.render import identity, keys, clean
 from access_manager.reconcile import patch_for
@@ -32,10 +32,14 @@ class ManagerTests(unittest.TestCase):
 
     def test_plan_summary_separates_add_change_and_remove(self):
         api = FakeAPI()
-        engine(api, grants=[grant("old"), grant("changed")]).apply()
-        changed = grant("changed", subjects=[{"kind": "User", "source": "external", "name": "manual"}])
-        e = engine(api, config(management={"prune": True}), grants=[changed, grant("new")])
-        planned = e.report()["planned"]
+        engine(api, grants=[grant("old"), grant("changed"), grant("unchanged")]).apply()
+        changed = grant("changed", subjects=[{"kind": "User", "name": "manual"}])
+        e = engine(api, config(management={"prune": True}), grants=[changed, grant("new"), grant("unchanged")])
+        report = e.report()
+        self.assertEqual(report["summary"]["noop"], 1)
+        self.assertEqual({c["action"] for c in report["changes"]}, {"create", "update", "delete"})
+        self.assertEqual(len(report["changes"]), 3)
+        planned = report["planned"]
         self.assertEqual([len(planned[k]) for k in ("add", "change", "remove")], [1, 1, 1])
         self.assertEqual(planned["change"][0]["action"], "update")
 
@@ -49,12 +53,16 @@ class ManagerTests(unittest.TestCase):
         obj["metadata"]["labels"]["foreign"] = "keep"
         e2 = engine(api, grants=[grant()])
         self.assertFalse(e2.apply())
+        report = e2.report()
+        self.assertEqual(report["changes"], [])
+        self.assertEqual(report["planned"], {"add": [], "change": [], "remove": []})
+        self.assertEqual(report["summary"], {"create": 0, "update": 0, "replace": 0, "delete": 0, "noop": 1})
         self.assertEqual(api.objects[api.path(*key)]["metadata"]["annotations"]["foreign"], "keep")
 
     def test_subject_update(self):
         api = FakeAPI()
         engine(api, grants=[grant()]).apply()
-        g = grant(subjects=[{"kind": "User", "source": "external", "name": "jane"}])
+        g = grant(subjects=[{"kind": "User", "name": "jane"}])
         e = engine(api, grants=[g])
         self.assertEqual(e.report()["summary"]["update"], 1)
         e.apply()
@@ -101,12 +109,6 @@ class ManagerTests(unittest.TestCase):
             )
         )
 
-    def test_local_identity_on_vanilla_rejected(self):
-        self.assertBlocked(
-            lambda: engine(
-                users=[{"name": "jane", "source": "static", "email": "jane@example.org"}]
-            )
-        )
 
     def test_role_ref_replace_requires_opt_in_and_counts_deletion(self):
         api = FakeAPI()
@@ -237,7 +239,7 @@ class ManagerTests(unittest.TestCase):
         api = FakeAPI()
         engine(api, grants=[grant()]).apply()
         e = engine(
-            api, grants=[grant(subjects=[{"kind": "User", "source": "external", "name": "new"}])]
+            api, grants=[grant(subjects=[{"kind": "User", "name": "new"}])]
         )
         key = next(iter(e.desired))
         api.objects[api.path(*key)]["metadata"]["resourceVersion"] = "concurrent"
@@ -297,40 +299,6 @@ class ManagerTests(unittest.TestCase):
         ] = "2"
         self.assertBlocked(lambda: engine(api, cfg, grants=[grant()]))
 
-    def test_deckhouse_user_group_and_static_resolution(self):
-        api = FakeAPI()
-        users = [
-            {"name": "jane", "source": "static", "email": "jane@example.org", "password_hash": HASH}
-        ]
-        groups = [
-            {"name": "developers", "source": "static", "claim_name": "devs", "members": ["jane"]}
-        ]
-        g = grant(
-            subjects=[
-                {"kind": "User", "source": "static", "name": "jane"},
-                {"kind": "Group", "source": "static", "name": "developers"},
-            ]
-        )
-        e = engine(api, config(True), users, groups, [g])
-        self.assertTrue(e.apply())
-        self.assertFalse(engine(api, config(True), users, groups, [g]).apply())
-        public = json.dumps(e.report())
-        self.assertNotIn(HASH, public)
-        self.assertNotIn("password", public)
-        self.assertIn("jane@example.org", public)
-
-    def test_on_create_password_not_reset(self):
-        api = FakeAPI()
-        users = [
-            {"name": "jane", "source": "static", "email": "jane@example.org", "password_hash": HASH}
-        ]
-        engine(api, config(True), users=users).apply()
-        users[0]["password_hash"] = "$2b$12$" + "b" * 53
-        e = engine(api, config(True), users=users)
-        self.assertFalse(e.apply())
-        users[0]["password_policy"] = "managed"
-        self.assertTrue(engine(api, config(True), users=users).apply())
-        self.assertFalse(engine(api, config(True), users=users).apply())
 
     def test_deckhouse_disabled_module_even_with_crd(self):
         api = FakeAPI()
@@ -339,19 +307,57 @@ class ManagerTests(unittest.TestCase):
         ] = False
         self.assertBlocked(lambda: engine(api, config(True), grants=[grant()]))
 
-    def test_deckhouse_profile_required_and_image_bound(self):
-        self.assertBlocked(lambda: engine(cfg=config(platform="deckhouse")))
+    def test_deckhouse_capability_discovery_ignores_deployment(self):
+        self.assertEqual(engine(cfg=config(platform="deckhouse")).profile["api_versions"], {})
         api = FakeAPI()
         api.objects["/apis/apps/v1/namespaces/d8-system/deployments/deckhouse"]["spec"]["template"][
             "spec"
         ]["containers"][0]["image"] = "different"
-        self.assertBlocked(lambda: engine(api, config(True)))
+        engine(api, config(True))
+        self.assertFalse(any("deployments/deckhouse" in str(call) for call in api.calls))
+
+    def test_ready_module_without_moduleconfig_or_deployment(self):
+        api = FakeAPI()
+        del api.objects["/apis/deckhouse.io/v1alpha1/moduleconfigs/user-authz"]
+        del api.objects["/apis/apps/v1/namespaces/d8-system/deployments/deckhouse"]
+        e = engine(api, config(platform="deckhouse"), grants=[grant()])
+        self.assertEqual(e.authz_config, {})
+        self.assertTrue(e.apply())
+
+    def test_module_state_and_crd_capabilities_are_required(self):
+        for field, value in (("phase", "Error"), ("EnabledByModuleManager", "False"), ("IsReady", "False")):
+            api = FakeAPI()
+            status = api.objects["/apis/deckhouse.io/v1alpha1/modules/user-authz"]["status"]
+            if field == "phase":
+                status[field] = value
+            else:
+                next(c for c in status["conditions"] if c["type"] == field)["status"] = value
+            self.assertBlocked(lambda: engine(api, config(platform="deckhouse"), grants=[grant()]))
+        for mutation in ("established", "served", "schema"):
+            api = FakeAPI()
+            crd = api.objects["/apis/apiextensions.k8s.io/v1/customresourcedefinitions/authorizationrules.deckhouse.io"]
+            if mutation == "established":
+                crd["status"]["conditions"][0]["status"] = "False"
+            elif mutation == "served":
+                crd["spec"]["versions"][0]["served"] = False
+            else:
+                del crd["spec"]["versions"][0]["schema"]
+            self.assertBlocked(lambda: engine(api, config(platform="deckhouse"), grants=[grant()]))
+
+    def test_missing_moduleconfig_is_guarded_against_appearance_before_apply(self):
+        api = FakeAPI()
+        path = "/apis/deckhouse.io/v1alpha1/moduleconfigs/user-authz"
+        old = api.objects.pop(path)
+        e = engine(api, config(platform="deckhouse"), grants=[grant()])
+        api.objects[path] = old
+        self.assertBlocked(e.apply)
+        self.assertFalse(any(call[0] != "GET" for call in api.calls))
 
     def deck_grant(self, **kw):
         g = {
             "id": "basic",
             "backend": "deckhouse",
-            "subjects": [{"kind": "Group", "source": "external", "name": "devs"}],
+            "subjects": [{"kind": "Group", "name": "devs"}],
             "accessLevel": "User",
             "scope": {"namespace_selector": {"matchLabels": {"env": "review"}}},
         }
@@ -390,51 +396,17 @@ class ManagerTests(unittest.TestCase):
         obj = next(o for o in api.objects.values() if o.get("kind") == "ClusterAuthorizationRule")
         self.assertNotIn("namespaceSelector", obj["spec"])
 
-    def test_identity_deletion_requires_flag_and_no_references(self):
-        api = FakeAPI()
-        users = [
-            {"name": "jane", "source": "static", "email": "jane@example.org", "password_hash": HASH}
-        ]
-        g = grant(subjects=[{"kind": "User", "source": "static", "name": "jane"}])
-        engine(api, config(True), users=users, grants=[g]).apply()
-        absent = [{"name": "jane", "source": "static", "state": "absent"}]
-        self.assertBlocked(lambda: engine(api, config(True), users=absent))
-        cfg = config(True, management={"prune_identities": True})
-        self.assertBlocked(lambda: engine(api, cfg, users=absent))
-        e = engine(api, cfg, users=absent, grants=[grant(state="absent")])
-        self.assertTrue(e.apply())
-        self.assertEqual([x["kind"] for x in e.completed], ["RoleBinding", "User"])
 
-    def test_local_external_collision_and_unknown_group_member(self):
-        users = [
-            {"name": "jane", "source": "static", "email": "jane@example.org", "password_hash": HASH}
-        ]
-        self.assertBlocked(
-            lambda: engine(
-                cfg=config(True),
-                users=users,
-                grants=[
-                    grant(
-                        subjects=[
-                            {"kind": "User", "source": "external", "name": "jane@example.org"}
-                        ]
-                    )
-                ],
-            )
-        )
-        self.assertBlocked(
-            lambda: engine(
-                cfg=config(True),
-                groups=[
-                    {
-                        "name": "devs",
-                        "source": "static",
-                        "claim_name": "devs",
-                        "members": ["missing"],
-                    }
-                ],
-            )
-        )
+    def test_subject_names_are_literal_and_export_has_no_source(self):
+        api = FakeAPI()
+        subjects = [{"kind": "User", "name": "Jane@EXAMPLE.org"},
+                    {"kind": "Group", "name": "ldap:readers"}]
+        engine(api, grants=[grant(subjects=subjects)]).apply()
+        exported = export_state(engine(api), {"mode": "managed"})
+        grants = exported["inventory"]["k8s_configuration_grants"]
+        self.assertCountEqual(grants[0]["subjects"], subjects)
+        engine(api, grants=grants).apply()
+        self.assertFalse(engine(api, grants=grants).apply())
 
     def test_export_round_trip_preserves_binding_name(self):
         api = FakeAPI()

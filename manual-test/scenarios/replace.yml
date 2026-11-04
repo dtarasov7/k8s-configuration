@@ -1,0 +1,17 @@
+---
+# First run with replacement disabled: expect refusal. Then explicitly enable it.
+manual_test_replacement_grant:
+  id: upgrade-candidate
+  backend: rbac
+  subjects:
+    - kind: User
+      name: access-test:upgrader
+  roleRef:
+    kind: ClusterRole
+    name: edit
+  scope:
+    namespaces:
+      - access-test-dev
+  target_name: access-test-upgrade
+k8s_configuration_grants: "{{ (manual_test_grants_baseline | rejectattr('id', 'equalto', 'upgrade-candidate') | list) + [manual_test_replacement_grant]\
+  \ }}"

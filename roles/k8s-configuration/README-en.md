@@ -1,12 +1,32 @@
 # k8s-configuration
 
-Ansible role managing Kubernetes and Deckhouse authorization through HTTPS REST. Supports dry/apply/export, check/diff, UID-bound adoption, bounded pruning, local Deckhouse User/Group and basic authorization resources. Runtime does not depend on kubernetes.core, Kubernetes SDK or kubectl.
+Ansible role managing Kubernetes and Deckhouse authorization through the installed kubectl. Supports dry/apply/export/matrix, check/diff, UID-bound adoption, bounded pruning, basic Deckhouse authorization resources. No custom HTTP client, kubernetes.core or Kubernetes SDK is used.
 
-Vanilla Kubernetes identities remain external. The role does not create LDAP/OIDC identities, certificates, namespaces, Role/ClusterRole definitions, service accounts or tokens. It references existing roles and identities.
+The role manages access assignments for existing subjects only. It never creates, updates or deletes User/Group objects, passwords or group memberships. Deckhouse User/Group objects are read only for permission matrices. Vanilla Kubernetes identities remain external. The role does not create LDAP/OIDC identities, certificates, namespaces, Role/ClusterRole definitions, service accounts or tokens. It references existing roles and identities.
+
+## Result files on the Ansible controller
+
+Dry (including plan), export and matrix automatically save their results on the machine running ansible-playbook. kubectl/API reads stay on the selected target host. File tasks delegate to localhost with local connection, ansible_playbook_python and become=false. No controller entry in inventory is needed.
+
+```yaml
+k8s_configuration_report_path: "{{ playbook_dir }}/output/{{ inventory_hostname }}/dry.yml"
+k8s_configuration_export_destination: "{{ playbook_dir }}/output/{{ inventory_hostname }}/export.yml"
+k8s_configuration_export_audit_destination: "{{ playbook_dir }}/output/{{ inventory_hostname }}/export-audit.yml"
+k8s_configuration_matrix_output_dir: "{{ playbook_dir }}/output/{{ inventory_hostname }}"
+k8s_configuration_matrix_filename: matrix.csv
+k8s_configuration_matrix_bindings_filename: bindings.csv
+k8s_configuration_matrix_subjects_filename: subjects.csv
+```
+
+These are the defaults. report_path/export_destination include the filename; matrix_output_dir and the three *_filename variables configure CSV placement/names. Relative paths resolve against playbook_dir on the controller; ~ expands for the controller user. Files of one result must have distinct paths. Dry requires a nonempty report_path. An empty export_audit_destination disables only the additional audit. Apply does not automatically save reports.
+
+Dry saves the sanitized plan, export the importable inventory plus separate audit, matrix its three CSV reports. New directories use 0700 and files 0600; existing directory permissions are preserved. File contents stay hidden from --diff. Final output lists controller file paths.
+
+--check reads the cluster and previews file changes without writing files. changed can indicate controller file changes even though the Kubernetes API is read-only. Unchanged repeated runs are idempotent.
 
 ## Requirements and example
 
-Execution host: Python 3.8+, PyYAML, kubeconfig, network access and appropriate API permissions. Control node: ansible-core 2.12+ with its supported Python version. Install dependencies separately; see requirements-legacy.txt and requirements-modern.txt. The legacy 2.12 branch is EOL. Use one execution host and serialize runs per cluster/owner.
+Execution host: Python 3.8+, kubectl, kubeconfig, network access and appropriate API permissions. PyYAML is not required by the role runtime on the execution host. Control node: ansible-core 2.12+ with its supported Python version. Install dependencies separately; see requirements-legacy.txt and requirements-modern.txt. The legacy 2.12 branch is EOL. Exactly one execution host must remain after combining play hosts and --limit. Hostnames, groups, all, lists and patterns are allowed. Multiple effective hosts fail before kubectl; serial: 1 does not bypass the full selected-host check (ansible_play_hosts_all). Use gather_facts: false to validate before host connections. Serialize runs per cluster/owner.
 
 ```yaml
 # inventory.yml
@@ -22,30 +42,28 @@ all:
   hosts: access_executor
   gather_facts: false
   vars:
-    k8s_configuration_config:
-      mode: dry
-      platform: vanilla
-      connection:
-        kubeconfig: /etc/ansible/cluster.yaml
-        context: prod
-      management:
-        owner: platform
-        namespaces: [development]
-        include_cluster_scoped: false
+    k8s_configuration_config_mode: dry
+    k8s_configuration_config_platform: vanilla
+    k8s_configuration_config_connection_kubeconfig: /etc/ansible/cluster.yaml
+    k8s_configuration_config_connection_context: prod
+    k8s_configuration_config_management_owner: platform
+    k8s_configuration_config_management_namespaces:
+    - development
+    k8s_configuration_config_management_include_cluster_scoped: false
     k8s_configuration_grants:
-      - id: readers
-        backend: rbac
-        subjects:
-          - kind: Group
-            source: external
-            name: oidc:readers
-        roleRef:
-          kind: ClusterRole
-          name: view
-        scope:
-          namespaces: [development]
+    - id: readers
+      backend: rbac
+      subjects:
+      - kind: Group
+        name: oidc:readers
+      roleRef:
+        kind: ClusterRole
+        name: view
+      scope:
+        namespaces:
+        - development
   roles:
-    - role: k8s-configuration
+  - role: k8s-configuration
 ```
 
 ```bash
@@ -53,106 +71,124 @@ ANSIBLE_ROLES_PATH=./roles ansible-playbook -i inventory.yml access.yml
 ANSIBLE_ROLES_PATH=./roles ansible-playbook -i inventory.yml access.yml --check --diff
 ```
 
-Modes are dry (default), apply, export. Dry independently reads and reports planned additions, changes and removals with changed=false. Apply --check predicts changes without writes; --diff shows sanitized before/after. Export --check still exports, previewing the file write without creating it. Export hashes stay hidden from diff. The old plan spelling remains a compatibility alias. Server validation runs only during real apply.
+Modes are dry (default), apply, export and matrix. Dry independently reads and reports planned additions, changes and removals with no Kubernetes writes; saving the controller report may set changed=true. Apply --check predicts changes without writes; --diff shows sanitized before/after. Export --check still exports, previewing the file write without creating it. Matrix reads current RBAC and prepares CSV reports; --check previews file writes. The old plan spelling remains a compatibility alias. Server validation runs only during real apply.
 
 ## Public variables
 
-| Variable | Default and meaning |
+Role settings are **flat variables**. For example config.schema_version becomes k8s_configuration_config_schema_version, connection.kubeconfig becomes k8s_configuration_config_connection_kubeconfig. The execute.yml task passes flat arguments directly to the Python module, which assembles internal engine settings. There is no vars/main.yml.
+
+k8s_configuration_grants has no default: omitted means unmanaged, [] means explicitly empty. The k8s_configuration_users and k8s_configuration_groups parameters have been removed; manage identities outside this role. Domain data (references, memberships and rules) remain lists of objects.
+
+Additional variables: k8s_configuration_no_log=true, k8s_configuration_report_path (controller dry report), k8s_configuration_certificates=[] ({name, content}: ca_content/cert_content/key_content). k8s_configuration_result is the registered result; export contains assignments only and its contents stay hidden in task output. Unknown module-payload fields are rejected.
+
+### Flat configuration settings
+
+| Variable | Default |
 | --- | --- |
-| k8s_configuration_config | Main configuration below |
-| k8s_configuration_users | Undefined: leave section unmanaged; local Deckhouse Users |
-| k8s_configuration_groups | Undefined: leave section unmanaged; local Deckhouse Groups |
-| k8s_configuration_grants | Undefined: leave section unmanaged; authorization assignments |
-| k8s_configuration_export | `{destination: ./k8s-configuration-export.yml}`, export configuration below |
-| k8s_configuration_report_path | Empty; optional sanitized report path on execution host |
-| k8s_configuration_no_log | true; hide full result except sanitized --diff; export is always hidden |
-| k8s_configuration_certificates | `[]`; pre-resolved `{name, content}` TLS entries, supported names ca_content/cert_content/key_content |
-| k8s_configuration_hashi_vault_path | Empty; optional Vault lookup path used in inventory variables |
-| k8s_configuration_hashi_vault_path_password | Empty; optional password-secret lookup path |
-| k8s_configuration_local_certs_path | `./certs/`, optional local lookup base |
-| k8s_configuration_result | Registered result; export includes sensitive bcrypt inventory, keep private |
+| `k8s_configuration_config_schema_version` | `1` |
+| `k8s_configuration_config_mode` | `"dry"` |
+| `k8s_configuration_config_platform` | `"vanilla"` |
+| `k8s_configuration_config_connection_kubectl` | `"kubectl"` |
+| `k8s_configuration_config_connection_validate_tls` | `true` |
+| `k8s_configuration_config_connection_timeout_seconds` | `30` |
+| `k8s_configuration_config_connection_retries` | `2` |
+| `k8s_configuration_config_connection_kubeconfig` | `""` |
+| `k8s_configuration_config_connection_context` | `""` |
+| `k8s_configuration_config_connection_ca_content` | `""` |
+| `k8s_configuration_config_connection_cert_content` | `""` |
+| `k8s_configuration_config_connection_key_content` | `""` |
+| `k8s_configuration_config_deckhouse_basic_authz` | `false` |
+| `k8s_configuration_config_deckhouse_api_versions_authorization_rule` | `""` |
+| `k8s_configuration_config_deckhouse_api_versions_cluster_authorization_rule` | `""` |
+| `k8s_configuration_config_deckhouse_ready_checks_user_authz` | `[]` |
+| `k8s_configuration_config_deckhouse_authz_ready_condition` | `""` |
+| `k8s_configuration_config_deckhouse_mixed_backends` | `false` |
+| `k8s_configuration_config_deckhouse_granular_roles` | `[]` |
+| `k8s_configuration_config_deckhouse_controller_markers_labels` | `[]` |
+| `k8s_configuration_config_deckhouse_controller_markers_annotations` | `[]` |
+| `k8s_configuration_config_deckhouse_controller_markers_name_prefixes` | `[]` |
+| `k8s_configuration_config_management_owner` | `"ansible-access-manager"` |
+| `k8s_configuration_config_management_prune` | `false` |
+| `k8s_configuration_config_management_adoption` | `[]` |
+| `k8s_configuration_config_management_label_domain` | `"access-manager.ansible.local"` |
+| `k8s_configuration_config_management_namespaces` | `null` |
+| `k8s_configuration_config_management_include_cluster_scoped` | `true` |
+| `k8s_configuration_config_safety_max_deletions` | `10` |
+| `k8s_configuration_config_safety_allow_empty_desired` | `false` |
+| `k8s_configuration_config_safety_allow_binding_replacement` | `false` |
+| `k8s_configuration_config_safety_protected_namespaces` | `["kube-system", "kube-public", "kube-node-lease", "default", "loghouse"]` |
+| `k8s_configuration_config_safety_protected_namespace_prefixes` | `["kube-", "d8-"]` |
+| `k8s_configuration_config_safety_allowed_protected_namespaces` | `[]` |
+| `k8s_configuration_config_safety_protected_objects` | `[]` |
+| `k8s_configuration_config_server_validation` | `false` |
+| `k8s_configuration_config_wait_timeout_seconds` | `60` |
+| `k8s_configuration_config_expected_plan_digest` | `""` |
 
-Undefined sections are not pruned; explicitly empty sections represent empty desired state. Pruning them additionally requires allow_empty_desired. Unknown input fields fail validation. Config dictionaries receive internal defaults regardless of Ansible hash_behaviour.
-
-### Configuration fields
-
-| Field | Default / contract |
-| --- | --- |
-| schema_version | 1 |
-| mode | dry/apply/export; default dry |
-| platform | vanilla/deckhouse; default vanilla |
-| connection.kubeconfig | Required execution-host file |
-| connection.context | kubeconfig current-context |
-| connection.validate_tls | true; insecure kubeconfig requires explicit false |
-| connection.timeout_seconds | 30, range 1..3600 |
-| connection.retries | 2, range 0..5; bounded retries for GET |
-| connection.ca_content/cert_content/key_content | Optional PEM overrides |
-| management.owner | ansible-access-manager, Kubernetes label value |
-| management.label_domain | access-manager.ansible.local; keep fixed after first apply |
-| management.prune | false |
-| management.prune_identities | false; also required for explicit absent User/Group |
-| management.adoption | `[]`; exact group/resource/namespace?/name/uid references |
-| management.namespaces | null: all; otherwise restrict writes and pruning to listed namespaces |
-| management.include_cluster_scoped | true; false also excludes User/Group management |
-| safety.max_deletions | 10, including replacements |
-| safety.allow_empty_desired | false |
-| safety.allow_binding_replacement | false |
-| safety.protected_namespaces | kube-system, kube-public, kube-node-lease, default, loghouse |
-| safety.protected_namespace_prefixes | kube-, d8- |
-| safety.allowed_protected_namespaces | `[]`; exact exceptions |
-| safety.protected_objects | `[]`; exact group/resource/namespace?/name references |
-| deckhouse.basic_authz | false |
-| deckhouse.compatibility_profile | Required profile name for Deckhouse |
-| deckhouse.profiles | `{}`; operator-supplied version-specific profiles |
-| server_validation | false; explicitly enables dryRun=All POST/PATCH before apply only |
-| wait_timeout_seconds | 60; deletion, readiness and access-check timeout |
-| expected_plan_digest | Optional fail-on-drift plan digest |
-| access_checks | `[]`; SubjectAccessReview checks after apply |
-
-Kubeconfig supports token, rotating tokenFile and certificate/key paths or data. Relative paths resolve against kubeconfig. One context/file only; no exec/auth-provider, OIDC refresh, basic auth, proxy-url, tls-server-name, extensions or impersonation. Redirects are forbidden. TLS content uses private 0600 temporary files in a 0700 directory and is cleaned in finally.
-
-### Identity and grant schemas
-
-User fields: name, source=static, email (lowercase), optional password_hash (raw bcrypt), password_policy (on_create or managed), allow_collision (false), state (present or absent). A new User requires a hash. on_create preserves an existing password; managed requires a hash and profile.password_updates=true. No TTL, UserOperation, 2FA reset or session revocation.
-
-Group fields: name, source=static, claim_name, members (complete list of present inventory User names), optional allow_collision/state. Nested groups are unsupported. Explicit allow_collision sets the Deckhouse collision annotation for that identity only.
+### Grant schema
 
 Grant fields: id, backend (rbac/deckhouse), subjects, scope; roleRef {kind, name} for rbac or accessLevel/options for Deckhouse. Optional state and target_name. Deterministic names incorporate owner/id/kind/namespace and a digest. target_name preserves original exported/adopted names and requires a single physical target.
 
-Subjects: `{kind: User|Group, source: external|static, name}` or `{kind: ServiceAccount, source: serviceaccount, name, namespace}`. Static references resolve to local email/claim_name; external names are preserved exactly. Source is not part of Kubernetes identity and does not isolate matching claim strings.
+Subjects: `{kind: User|Group, name}` or `{kind: ServiceAccount, name, namespace}`. Names are preserved literally, including case and prefixes. Use the email for a local Deckhouse User and spec.name for a Group. Subjects and exported grants no longer contain source.
 
 Scope contains exactly one of cluster=true, nonempty namespaces, or nonempty namespace_selector {matchLabels, matchExpressions}. Selectors only work for Deckhouse CAR. CAR cluster scope additionally requires include_system_namespaces boolean. RBAC ClusterRoleBinding cannot exclude namespaces. RoleBinding references a Role in its namespace or a ClusterRole; ClusterRoleBinding references a ClusterRole only.
 
 AR access levels: User, PrivilegedUser, Editor, Admin. CAR additionally supports ClusterEditor, ClusterAdmin, SuperAdmin. Options: allowScale and portForwarding, both default false. Referenced Deckhouse d8:/user-authz: granular role names/scopes must be explicitly approved by the profile.
 
-Absent identities need name/source/state. Absent grants need id/backend/scope/state and optional target_name; subjects/roleRef are unnecessary. All deletion protections still apply.
+Absent grants need id/backend/scope/state and optional target_name; subjects/roleRef are unnecessary. All deletion protections still apply.
 
-### Deckhouse profiles
+### Active Directory / LDAP usernames
 
-No production profile is pre-approved because the target Deckhouse version/edition was not supplied. Operators must validate a profile on their test cluster. See the full YAML example in README.md; field names and schemas are identical in both languages.
+For an individual assignment, set `subjects.kind: User` and use the exact Kubernetes username in `subjects.name`, preserving case and prefixes. The role passes the name unchanged. LDAP/Dex/OIDC settings determine the resulting name; email, `DOMAIN\login` and `sAMAccountName` are not universal formats.
 
-Required profile fields:
+Run this command with the intended user's kubeconfig after authenticating through AD/LDAP:
 
-- deckhouse_image: exact image string of d8-system/deckhouse Deployment; readiness and observedGeneration are checked.
-- api_versions: explicit User, Group, AuthorizationRule and ClusterAuthorizationRule versions (deckhouse.io/v1 or v1alpha1), verified using discovery and served CRD schemas.
-- mixed_backends: boolean acknowledging tested mixed basic/RBAC semantics.
-- ready_checks: user-authz and, when identities/export are involved, user-authn probe lists. A probe has GET path, JSON pointer and exactly one of equals/minimum.
+```bash
+kubectl auth whoami -o yaml
+```
 
-Optional profile fields: authz_ready_condition (e.g. Ready; observed generation is checked), password_updates (false), granular_roles mapping role names to [namespace, cluster] allowed scopes, controller_markers {labels, annotations, name_prefixes}. Without an authz Ready condition, basic grants require explicit positive access_checks.
+Use `status.userInfo.username`. An administrator's kubeconfig returns the administrator's identity instead.
 
-ModuleConfig must be readable and not explicitly disabled; absent ModuleConfig fails closed. Probes must prove module readiness even if CRDs remain installed. CAR requires verified enableMultiTenancy=true, including cluster scope. Selectors that currently match protected namespaces fail; future label changes can expand their reach. Namespace lists provide a more predictable boundary.
+For example, if the username is `ivan.petrov@example.org`:
 
-Access checks are config.access_checks entries with user, optional groups, resourceAttributes, allowed. resourceAttributes supports namespace/verb/group/version/resource/subresource/name; verb/resource are required. Supply group claims explicitly: SAR does not query IdP membership. Positive and negative checks require permission to create SubjectAccessReview. Positive checks also run before stale pruning. All checks execute after apply, including noop, and never during plan/check.
+```yaml
+k8s_configuration_grants:
+  - id: ivan-read
+    backend: rbac
+    subjects:
+      - kind: User
+        name: 'ivan.petrov@example.org'
+    roleRef:
+      kind: ClusterRole
+      name: view
+    scope:
+      namespaces: [development]
+```
+
+The configured external provider handles authentication. The role creates the access assignment only; no AD account or local Deckhouse User is created or required for this assignment.
+
+Sources: [kubectl auth whoami](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_auth/kubectl_auth_whoami/), [Kubernetes authentication](https://kubernetes.io/docs/reference/access-authn-authz/authentication/).
+
+### Deckhouse capability checks
+
+Discovery selects served API versions and verifies resource scope, CRD Established status and the selected version's schema/required fields for AR/CAR. Empty k8s_configuration_config_deckhouse_api_versions_* values enable automatic discovery; nonempty values pin an API version. CRD presence alone is not module readiness.
+
+user-authz requires a Module with phase=Ready, EnabledByModuleManager=True and IsReady=True. ModuleConfig is optional; an existing spec.enabled=false blocks the run. Forbidden is not treated as absence. Module state and ModuleConfig presence/version are guarded again before apply. [Module status](https://deckhouse.io/products/kubernetes-platform/documentation/v1/architecture/module-development/run/)
+
+CAR requiring multitenancy still needs explicit enableMultiTenancy=true in user-authz ModuleConfig. Absence never implies support; the role does not create ModuleConfig.
+
+Ordinary runs rely on API/capability checks. ready_checks_user_authz provides optional extra {path, pointer, equals|minimum} probes; no fictitious user-authz-controller is assumed.
+
+granular_roles is a list of {name, scopes: [namespace|cluster]}, replacing role→scopes maps. controller_markers_labels/annotations are {key,value} lists; name_prefixes is a string list. mixed_backends remains an explicit operator opt-in. authz_ready_condition defaults to empty; do not invent a Ready condition for unsupported CRDs.
 
 ### Export fields
 
-Export fields: mode managed/scoped (managed), backends, cluster_roles, roles, access_levels, namespaces, include_cluster_scoped (true), exclude_controller_generated (true), include_identities (true), allow_partial (false), destination (`./k8s-configuration-export.yml`), optional audit_destination.
+Export fields: mode managed/scoped (managed), backends, cluster_roles, roles, access_levels, namespaces, include_cluster_scoped (true), exclude_controller_generated (true), allow_partial (false), destination (controller export.yml), optional audit_destination (controller export-audit.yml by default).
 
 Scoped mode requires explicit role/access-level allowlists and captures manual objects. Managed mode also captures manual edits to owned objects. Empty namespaces imposes no namespace filter; cluster-scoped bindings are included unless explicitly disabled. CAR selectors are preserved whole.
 
-The destination contains only `k8s_configuration_users`, `k8s_configuration_groups`, `k8s_configuration_grants`, ready for vars_files/group_vars or insertion into inventory vars. Audit is written separately to audit_destination. Configure the destination cluster's kubeconfig/profile/owner separately. Namespaces and referenced roles/service accounts must already exist there.
+The destination contains only `k8s_configuration_grants`, ready for vars_files/group_vars or insertion into inventory vars. Audit is written separately to audit_destination. Configure the destination cluster's kubeconfig/profile/owner separately. Namespaces and referenced roles/service accounts must already exist there.
 
-Standalone selected User/Group resources and grant dependencies are included. Local User bcrypt hashes are exported as password_hash to allow recreation on another cluster. They are never printed to stdout, audit or diff; export tasks always use no_log and private 0600 files. Encrypt files containing hashes with Ansible Vault before committing them. Tokens, client keys and sessions are excluded.
+Export contains only k8s_configuration_grants with access assignments. User/Group definitions, group memberships, passwords and hashes are never exported, including as dependencies. Subjects retain literal names. Files use mode 0600; namespace and Role/ClusterRole prerequisites must exist on the destination cluster.
 
 Unsupported selected resources/dependencies block file creation by default. allow_partial=true explicitly permits an incomplete snapshot for review. target_name preserves original names; applying to unowned existing resources still requires UID-bound adoption. Export does not take ownership. Review empty sections before enabling prune.
 
@@ -161,32 +197,30 @@ Unsupported selected resources/dependencies block file creation by default. allo
 Ansible Vault, local files and optional HashiCorp Vault work through inventory variables. No lookup logic is embedded in tasks or the Python client. Example:
 
 ```yaml
-k8s_configuration_hashi_vault_path: ""
-k8s_configuration_hashi_vault_path_password: secret=team/data/k8s-users
-vault_jane_bcrypt: "{{ lookup('file', 'private/jane.bcrypt') | trim }}"
+example_vault_certificate_path: ""
+example_local_certs_path: ./certs/
 # Optional alternative, requires community.hashi_vault on the control node:
-# vault_jane_bcrypt: "{{ lookup('community.hashi_vault.hashi_vault', k8s_configuration_hashi_vault_path_password + ':jane') }}"
 k8s_configuration_certificates:
   - name: ca_content
     content: >-
-      {{ lookup('community.hashi_vault.hashi_vault', k8s_configuration_hashi_vault_path + ':ca')
-         if k8s_configuration_hashi_vault_path | length > 0
-         else lookup('file', k8s_configuration_local_certs_path + 'ca.pem') }}
+      {{ lookup('community.hashi_vault.hashi_vault', example_vault_certificate_path + ':ca')
+         if example_vault_certificate_path | length > 0
+         else lookup('file', example_local_certs_path + 'ca.pem') }}
 ```
 
-Use cert_content/key_content similarly or keep paths in kubeconfig. Password salts/hashes are not regenerated during apply. Sensitive arguments, server error bodies and arbitrary exception details never enter public reports.
+Use cert_content/key_content similarly or keep paths in kubeconfig. Sensitive arguments, server error bodies and arbitrary exception details never enter public reports.
 
 ## Reconciliation and safety
 
 Ownership labels use label_domain/owner, /managed-by=ansible, /section; annotations /grant-id and /schema-version. Never change owner/domain without a migration. Foreign/partial owners, protected objects and controller-generated resources are immutable to this role. Controller detection covers ownerReferences, Helm/Deckhouse markers, rbac.deckhouse.io/automated and explicit profile markers. Adoption cannot override another owner.
 
-Reads use complete pagination. Before apply, cluster UID, observed objects, referenced roles, CRDs, module/probe versions and namespace labels are rechecked. PATCH uses UID/resourceVersion test operations; DELETE uses preconditions. Unknown permission fields block adoption/management. Foreign metadata is preserved; subject/member lists are authoritative. RoleRef changes require replacement opt-in and interrupt access. Finalizers are never forcibly removed.
+Reads use complete pagination. Before apply, cluster UID, observed objects, referenced roles, CRDs, module/probe versions and namespace labels are rechecked. PATCH uses UID/resourceVersion test operations; DELETE uses preconditions. Unknown permission fields block adoption/management. Foreign metadata is preserved; subject lists are authoritative. RoleRef changes require replacement opt-in and interrupt access. Finalizers are never forcibly removed.
 
-Order: users, groups, grants, stale grants, groups, users. Partial failures stop remaining pruning; completed/pending operations are returned. No automatic rollback. Backend migration creates before deleting and may overlap permissions. Identity deletion checks remaining API references but does not revoke sessions or existing tokens.
+Assignments are created and updated before stale assignments are deleted. Partial failures stop remaining pruning; completed/pending operations are returned. No automatic rollback. Backend migration creates before deleting and may overlap permissions.
 
-Plans report before/after, counts, digest and conservative privilege_change (increase for create, decrease for delete, unknown otherwise). Password changes reveal only a flag. Digests exclude secrets; pin secret CI inputs separately. Server dry-run does not prove controller convergence and cannot completely validate replacement before deletion.
+Dry files contain add/change/remove and metadata (cluster_uid, cluster_version, owner, digest). Additions and removals are described once, without apiVersion/apiGroup or internal metadata. change.fields contains only changed before/after values; replacement: true marks replacement. adoption appears only for actual adoption. privilege_change was removed: the report does not assess effective privilege increases/decreases. An unchanged dry run has empty add/change/remove lists. Use matrix for permission analysis. The module diagnostic result and standard --diff retain before/after; the dry file is a concise projection. Digests exclude secrets; pin secret CI inputs separately.
 
-Executor permissions: get/list bindings and namespaces, get referenced roles, create/patch/delete selected kinds plus assigned privileges or bind permission. Deckhouse also needs Deployment/ModuleConfig/CRD reads and identity list access. Authorization objects are listed cluster-wide to detect dependencies, even with namespace-limited writes. Read failures block reconciliation. Protect executor and emergency bindings explicitly; the role never grants itself cluster-admin.
+Executor permissions: get/list bindings and namespaces, get referenced roles, create/patch/delete selected kinds plus assigned privileges or bind permission. Deckhouse also needs Module/ModuleConfig/CRD reads (Deployment for extra probes); matrices also list User/Group objects. Authorization objects are listed cluster-wide to detect dependencies, even with namespace-limited writes. Read failures block reconciliation. Protect executor and emergency bindings explicitly; the role never grants itself cluster-admin.
 
 Tags: pre-req, install, user, ssl, config; clean is opt-in, ends the play and does not delete cluster access or reports. No OS users/services are created. Temporary TLS files are cleaned automatically.
 
@@ -198,10 +232,193 @@ python3 -m unittest discover -s roles/k8s-configuration/tests/integration -v
 ANSIBLE_ROLES_PATH=./roles ansible-playbook -i roles/k8s-configuration/examples/inventory.yml roles/k8s-configuration/examples/playbook.yml --syntax-check
 ```
 
-Transport tests require openssl and loopback sockets. HTTPS integration executes the actual packaged Ansible role. Molecule default uses Docker with a prepared RED OS/Python 3.8/PyYAML image and a separate real kind API, not CRD mocks. No privileged/systemd executor is needed. See README.md for exact cluster/image setup commands and tests/execution-environment/Dockerfile for the optional dependency image. Set KAM_TEST_KUBECONFIG and KAM_MOLECULE_IMAGE, then run molecule test from the role directory.
+Transport tests require kubectl, openssl and loopback sockets. HTTPS integration executes the actual packaged Ansible role. Molecule default uses Docker with a prepared RED OS/Python 3.8/PyYAML/kubectl image and a separate real kind API, not CRD mocks. No privileged/systemd executor is needed. See README.md for exact cluster/image setup commands and tests/execution-environment/Dockerfile for the optional dependency image. Set KAM_TEST_KUBECONFIG and KAM_MOLECULE_IMAGE, then run molecule test from the role directory.
 
-The dedicated kind fixture has three control-plane nodes. Tests cover real allowed/denied access, idempotence, export, roleRef replacement, deletion and restoration. tests/degradation.py stops one fixture node and always restarts it. tests/integration/deckhouse.yml requires an explicitly configured disposable Deckhouse cluster, its profile, inventory and positive/negative access checks. Actual validation results and remaining environment limitations are recorded in VALIDATION.md.
+The dedicated kind fixture has three control-plane nodes. Tests cover real allowed/denied access, idempotence, export, roleRef replacement, deletion and restoration. tests/degradation.py stops one fixture node and always restarts it. tests/integration/deckhouse.yml requires an explicitly configured disposable Deckhouse cluster, its profile and inventory. Actual validation results and remaining environment limitations are recorded in VALIDATION.md.
 
 ## Rename migration
 
 Use role `k8s-configuration` and variables prefixed `k8s_configuration_`; the custom module is k8s_configuration. Replace old k8s_access_manager variable names in inventory. Existing owner/domain labels and generated object names remain unchanged. Galaxy metadata uses the normalized name k8s_configuration.
+
+## Execution placement
+
+`hosts: redos8` executes the role and kubectl on that inventory host. `hosts: localhost` uses the Ansible controller; explicitly configured localhost must use ansible_connection: local. Kubeconfig, kubectl, auth plugins, TLS files and cluster-operation become apply to that execution host. Result files for dry/export/matrix are written on the Ansible controller without become.
+
+With `hosts: all`, choose the host using `ansible-playbook -i inventory/hosts.ini playbook.yaml -l redos8` or `-l localhost`. Localhost must be included in the inventory and the original play hosts. Groups, lists, patterns and `hosts: "{{ target_host }}"` are supported: only the effective host count after --limit matters. A singleton group works without --limit; multiple effective hosts fail even with serial: 1. If no hosts match, Ansible skips the play before the role runs. Inventory groups still supply group_vars.
+
+Commands use argv without a shell. GET/POST/DELETE use raw kubectl operations; updates use kubectl patch --type=json. Payloads and patches use stdin; arguments contain no tokens, keys or password hashes. UID/resourceVersion JSON Patch tests and DeleteOptions preconditions are preserved. Planning and bounded pruning remain in the role.
+
+## Access matrix: mode: matrix
+
+`matrix` reads cluster state through kubectl and writes `matrix.csv`, `bindings.csv` and `subjects.csv` on the Ansible controller. It sends GET requests only; no SubjectAccessReview or desired-state reconciliation. With source=cluster, desired grants are neither evaluated nor submitted. All bindings, including manual and controller-generated ones, are included by default.
+
+```yaml
+k8s_configuration_config_mode: matrix
+k8s_configuration_config_platform: vanilla
+k8s_configuration_config_connection_kubeconfig: /etc/ansible/cluster.yaml
+k8s_configuration_config_connection_context: prod
+k8s_configuration_matrix_output_dir: "{{ playbook_dir }}/output/{{ inventory_hostname }}"
+k8s_configuration_matrix_source: cluster
+k8s_configuration_matrix_scope: cluster
+k8s_configuration_matrix_namespaces: []
+k8s_configuration_matrix_include_cluster_scoped: true
+k8s_configuration_matrix_subjects_users: true
+k8s_configuration_matrix_subjects_groups: true
+k8s_configuration_matrix_subjects_service_accounts: false
+k8s_configuration_matrix_resolve_group_membership: true
+k8s_configuration_matrix_memberships: []
+k8s_configuration_matrix_csv_delimiter: ;
+```
+
+All options are optional. Defaults match this example except memberships=[]. The controller output directory defaults to playbook_dir/output/inventory_hostname. Unknown options fail validation. Delimiters: semicolon, comma or tab. A memberships entry accepts kind User or ServiceAccount (requiring namespace), name, groups and complete. A complete list replaces inferred Deckhouse membership; incomplete lists add known groups. Standard authentication/ServiceAccount groups always apply. This is an audit dictionary, not a cluster membership update.
+
+matrix.csv begins with namespace, api_group, resource, resource_name, non_resource_url and action; subsequent columns are User:<username>, Group:<claim> and ServiceAccount:<namespace>/<name>. Empty api_group means core API; empty resource_name means all names, distinct from a literal '*' in resourceNames. Rows come from assigned rules; wildcard expansion uses discovery, without reading workloads or Secret contents.
+
+For action=standard the fixed mask is **GLWCUPDX**:
+
+| G | L | W | C | U | P | D | X |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| get | list | watch | create | update | patch | delete | deletecollection |
+
+Uppercase means the subject is named directly in the binding; lowercase means access through known group membership. Direct grants win casing, while every source remains in bindings.csv. A dot means no grant in the selected RBAC with known membership; '?' means user membership is incomplete. Known positive grants remain letters. GLWcupd. means direct get/list/watch, inherited create/update/patch/delete and no deletecollection. Cluster-wide scope, role aggregation and controller generation do not determine casing.
+
+Special verbs (bind, escalate, impersonate, approve, use, custom verbs) have separate action=<verb> rows with Y/y/./?. action=* preserves permission for all special verbs, including future ones. Symbolic resource wildcards are retained alongside concrete rows. Namespace <cluster> identifies cluster resources/URLs, '*' all namespaces, <all-scopes> a symbolic rule across scopes, <unknown> an undiscovered resource with unknown scope (warning).
+
+RoleBinding stays within its namespace even when referencing ClusterRole. ClusterRoleBinding permissions expand into current namespaces and cluster resources. Namespace filters preserve applicable ClusterRoleBinding grants. include_cluster_scoped=false removes cluster resources/URLs, not namespaced grants from those bindings. resourceNames have separate rows, with broader grants projected onto them. Named list/watch require a matching metadata.name field selector. Name restrictions do not grant top-level create or deletecollection; named subresource create is included. Letters describe authorization rules, not HTTP endpoint support. [RBAC semantics](https://kubernetes.io/docs/reference/access-authn-authz/rbac/)
+
+bindings.csv explains each source: subject, direct/inherited origin, via_group, scope, full verbs, binding/role, aggregationRule and Deckhouse owner-UID provenance. Observed rules of aggregated ClusterRoles are authoritative; future aggregation results are not fabricated. subjects.csv includes identity, known groups, membership_complete and information sources. Kubernetes has no complete external user/group registry. ServiceAccounts are listed from the API, merged with their canonical User alias, and assigned system:authenticated, system:serviceaccounts and system:serviceaccounts:<namespace>. system:anonymous uses system:unauthenticated. External User columns show direct grants only; local Deckhouse memberships are resolved from Kubernetes. [Authentication](https://kubernetes.io/docs/reference/access-authn-authz/authentication/)
+
+For platform=deckhouse, matrix discovers served APIs and reads User, Group, AuthorizationRule and ClusterAuthorizationRule. It requires no module readiness probes. User becomes email; Group becomes spec.name. Known nested groups are expanded; cycles/unresolved references fail. resolve_group_membership=false disables inferred Deckhouse membership while explicit memberships still work. Local Deckhouse Users become complete after resolving local group membership. This describes local authentication, not an external-provider token using the same username; disabling resolution leaves membership incomplete.
+
+AR/CAR appear as deckhouse-declaration records, including original authorization parameters and selector-matched namespaces; permissions come only from actual RBAC. Generated bindings are linked only through owner UID. Unlinked declarations have reconciliation=unverified, without guessing from resource names. Linked scope/subject drift is flagged as linked-scope-or-subject-mismatch. linked-by-owner-uid establishes provenance, not complete reconciliation of declared permissions. Unsupported legacy namespace scope is preserved as declaration fields with an empty namespace list and warning.
+
+Required permissions: GET discovery for every served API version; list namespaces, Role/ClusterRole/RoleBinding/ClusterRoleBinding; list ServiceAccount when enabled; list the four Deckhouse kinds for that platform. Discovery/read errors and dangling roleRef fail before writing files; previous report files remain untouched. scope=managed includes only owned bindings and explicitly warns about omitted grants, including unowned controller-generated bindings. management.namespaces/safety do not limit the audit; use k8s_configuration_matrix_namespaces.
+
+New controller directories use mode 0700 and files 0600; existing directory permissions are preserved. CSV uses UTF-8 without BOM, LF, deterministic sorting, CSV quoting and spreadsheet formula protection (leading apostrophe). No password hashes/tokens enter reports. --diff never shows CSV contents. Repeated unchanged runs are idempotent. --check still reads the cluster and previews filesystem changes without writing files. Files are already on the controller; no fetch step is needed.
+
+This is a sequential RBAC snapshot with known membership, not an atomic snapshot or login test. Existing tokens may carry stale claims. Webhook/Node/ABAC, system:masters authorization bypass, admission and indirect privilege escalation are outside the calculation. SAR verification is not part of the role.
+
+### Matrix filters
+
+Defaults hide `system:*` users/groups, all ServiceAccount columns and system namespaces. System namespaces are `kube-system`, `kube-public`, `kube-node-lease`, plus `d8-*` for Deckhouse. `default` remains an application namespace. Override `k8s_configuration_matrix_system_namespaces` and `k8s_configuration_matrix_system_subjects` to replace this classification.
+
+All variables below use the `k8s_configuration_matrix_` prefix:
+
+| Variable suffix | Default | Meaning |
+| --- | --- | --- |
+| `namespace_mode` | `application` | `application`, `system`, or `all` |
+| `system_namespaces` | See above | System namespace names/globs |
+| `namespaces` | `[]` | Exact namespace names; nonexistent names fail |
+| `namespace_include`, `namespace_exclude` | `[]` | Namespace names/globs |
+| `include_system_subjects` | `false` | Also display system users/groups |
+| `include_external_users` | `false` | Include users without a local Deckhouse User; external identities default to groups only |
+| `system_subjects` | `['system:*']` | System user/group names/globs |
+| `users_include`, `users_exclude` | `[]` | User names/globs; Deckhouse email |
+| `groups_include`, `groups_exclude` | `[]` | Group names/globs; Deckhouse `spec.name` claim |
+| `subjects_service_accounts` | `false` | Display ServiceAccounts |
+| `service_accounts_include`, `service_accounts_exclude` | `[]` | Names/globs in `namespace/name` format |
+| `service_account_namespaces_include`, `service_account_namespaces_exclude` | `[]` | Namespace names/globs of ServiceAccounts themselves |
+| `omit_empty_rows` | `true` | Drop rows containing only dots across visible cells |
+| `exclude_broad_subjects` | `true` | Exclude broad wildcard principals and known group members |
+
+By default, `k8s_configuration_matrix_exclude_broad_subjects: true` removes groups, users and enabled ServiceAccounts with broad grants: a rule contains apiGroups=["*"] and resources=["*"], with absent/empty resourceNames. Any verbs qualify, including read-only get/list/watch. Grants must apply within the report scope: a ClusterRoleBinding or a RoleBinding in at least one selected namespace. Even an administrator of just one selected namespace is excluded entirely.
+
+Known local group members, ServiceAccounts and nested groups are also excluded; external Users are checked against direct grants only; unknown external memberships are not inferred. Role names such as cluster-admin are not criteria. Named-resource restrictions, a resource wildcard within a specific API group, and enumerated resource lists do not qualify automatically. This detects explicit wildcard grants, not every possible administrative capability.
+
+Excluded subjects' rules do not seed matrix rows; otherwise those rows would remain as '?' for other users with incomplete membership. All grants of those subjects, including narrow ones, are removed from report sources. Other hidden groups still contribute inherited grants. Summary fields excluded_broad_subjects and excluded_broad_subject_names cover all detected broad subjects, including those already hidden by other filters. Set k8s_configuration_matrix_exclude_broad_subjects=false to restore broad subjects and their rows; other filters still apply.
+
+Local Deckhouse User/Group membership is read from Kubernetes on each run, including nested groups and legacy User.spec.groups; emails are normalized to lowercase. With resolve_group_membership=true, local membership is complete without an inventory dictionary. Failed reads, cycles, unresolved references or ambiguous emails/claims stop the report. Disabling resolution leaves local User memberships incomplete.
+
+include_external_users=false hides external User columns and prevents their direct User rules from seeding rows. External group columns remain without inferring LDAP members. Vanilla User identities are all external. Explicitly enable the option to audit direct User bindings; only direct grants are shown using uppercase letters and dots. This setting affects matrix only, not apply/export. excluded_external_users counts omitted external User identities.
+
+Globs are case sensitive (`*`, `?`, `[abc]`), not regexes. An empty include imposes no restriction. Filters intersect; exclude wins over include. Explicit inclusion does not bypass system filters: select namespace_mode=system or all for kube-system. A glob matching nothing is valid and may produce a header-only CSV.
+
+Hidden groups still contribute inherited permissions to local Deckhouse Users and ServiceAccounts, including system:authenticated. Resource namespace filters are independent of ServiceAccount namespace filters. include_cluster_scoped controls cluster resources/URLs independently. Unknown-scope resources remain <unknown> with a warning. With namespace restrictions, symbolic */<all-scopes> rows expand only to selected namespaces and, when enabled, <cluster>.
+
+Rows containing '?' remain even without known positive grants. Supply confirmed complete memberships to reduce unknowns; never mark an unverified group list complete merely to shrink a report.
+
+subjects.csv contains selected columns only. RBAC records in bindings.csv explain selected subjects/rows and retain hidden group names as inheritance sources. AR/CAR declarations are selected by relevant subjects (including groups of visible subjects) and namespace; resolved_namespaces is restricted to the selection. Original declaration parameters remain intact and do not represent calculated permissions.
+
+The summary exposes filters, selected_namespaces, excluded_namespaces, excluded_subjects and omitted_empty_rows. Subject counts cover identities discovered within audit scope, not a complete external identity registry. Filters restrict the report; discovery/RBAC reads still require cluster-wide permissions. A warning identifies filtered reports.
+
+Regular users/groups accessing system namespaces:
+
+```yaml
+k8s_configuration_matrix_namespace_mode: system
+k8s_configuration_matrix_include_cluster_scoped: false
+```
+
+Organization users in project namespaces:
+
+```yaml
+k8s_configuration_matrix_namespace_include: ['project-*']
+k8s_configuration_matrix_namespace_exclude: ['project-archive']
+k8s_configuration_matrix_users_include: ['*@example.org']
+k8s_configuration_matrix_users_exclude: ['bot-*']
+k8s_configuration_matrix_subjects_groups: false
+```
+
+For a full selection including system identities, use namespace_mode=all, include_system_subjects=true, include_external_users=true, subjects_service_accounts=true, omit_empty_rows=false, exclude_broad_subjects=false; clear namespaces and all include/exclude lists, keep scope=cluster and include_cluster_scoped=true.
+
+
+### Flat export and matrix defaults
+
+| Variable | Default |
+| --- | --- |
+| `k8s_configuration_export_mode` | `"managed"` |
+| `k8s_configuration_export_backends` | `["rbac", "deckhouse"]` |
+| `k8s_configuration_export_cluster_roles` | `[]` |
+| `k8s_configuration_export_roles` | `[]` |
+| `k8s_configuration_export_access_levels` | `[]` |
+| `k8s_configuration_export_namespaces` | `[]` |
+| `k8s_configuration_export_include_cluster_scoped` | `true` |
+| `k8s_configuration_export_exclude_controller_generated` | `true` |
+| `k8s_configuration_export_allow_partial` | `false` |
+| `k8s_configuration_export_destination` | `"{{ playbook_dir }}/output/{{ inventory_hostname }}/export.yml"` |
+| `k8s_configuration_export_audit_destination` | `"{{ playbook_dir }}/output/{{ inventory_hostname }}/export-audit.yml"` |
+
+| Variable | Default |
+| --- | --- |
+| `k8s_configuration_matrix_output_dir` | `"{{ playbook_dir }}/output/{{ inventory_hostname }}"` |
+| `k8s_configuration_matrix_scope` | `"cluster"` |
+| `k8s_configuration_matrix_namespaces` | `[]` |
+| `k8s_configuration_matrix_include_cluster_scoped` | `true` |
+| `k8s_configuration_matrix_subjects_users` | `true` |
+| `k8s_configuration_matrix_subjects_groups` | `true` |
+| `k8s_configuration_matrix_subjects_service_accounts` | `false` |
+| `k8s_configuration_matrix_resolve_group_membership` | `true` |
+| `k8s_configuration_matrix_memberships` | `[]` |
+| `k8s_configuration_matrix_csv_delimiter` | `";"` |
+
+
+CSV filenames:
+
+- `k8s_configuration_matrix_filename`: `matrix.csv`.
+- `k8s_configuration_matrix_bindings_filename`: `bindings.csv`.
+- `k8s_configuration_matrix_subjects_filename`: `subjects.csv`.
+
+
+Matrix boolean switches accept YAML booleans and CLI key=value values, for example `-e k8s_configuration_matrix_include_external_users=true`. The role normalizes strings before schema validation. Typed JSON extra-vars also work: `-e '{"k8s_configuration_matrix_include_external_users": true}'`.
+
+External Users show direct grants only when include_external_users is enabled: uppercase letters and dots, with no inherited grants or question marks. A dot means no direct assignment, not denial of group-based access. A User is local when its subject name matches the normalized spec.email of a discovered Deckhouse User. All vanilla Users are external. subjects.csv adds rights_basis: direct_only for external Users, direct_and_groups for other subjects. membership_complete still describes knowledge of membership, not the calculation mode. Explicit memberships do not enable inheritance for external Users. Their bindings.csv records contain only direct sources.
+
+
+The role no longer accepts access_checks or runs SubjectAccessReview during apply or before prune. Inspect actual role-based permissions with matrix. No additional post-apply binding checks were added.
+
+Subject migration: remove source. Replace former static User references with their email and static Group references with spec.name; existing external/ServiceAccount names stay unchanged. Local User/Group management has been removed; manage identities outside this role.
+
+Inventory exports use compact YAML: each subject is a flow mapping, roleRef and scope are flow mappings. The parsed inventory schema is unchanged.
+
+The example_* lookup variables belong to inventory and are defined in the example; they are not role parameters. The role receives resolved values through k8s_configuration_certificates and connection_*_content.
+
+Mixed authorization warnings list the relevant subject and concrete RBAC and Deckhouse bindings; unrelated cluster subjects are not listed.
+
+### Inventory assignment matrix
+
+Set k8s_configuration_config_mode=matrix and k8s_configuration_matrix_source=inventory. The default source=cluster audits current bindings. Inventory mode uses only k8s_configuration_grants and current Role/ClusterRole rules from the API; it does not read or include live bindings. Explicit grants are required; [] is an empty set. Namespace RoleBindings, ClusterRoleBindings and omitted state: absent assignments are supported. Missing roles/namespaces fail before files are written. Aggregated roles use currently observed rules.
+
+Local Deckhouse membership still comes from live User/Group collections; identity definitions from inventory are not accepted. Existing filters, masks, direct-only external User columns and local group inheritance apply. Enable k8s_configuration_matrix_include_external_users for external User columns. summary.source, subjects.csv inventory-binding provenance and bindings.csv record_type=inventory-rbac identify the source.
+
+Default controller filenames are matrix-inventory.csv, bindings-inventory.csv and subjects-inventory.csv; explicit filename variables override them. This is permissions from the inventory assignments only, not complete effective access after apply. Other bindings, prune/adoption/deletion guards, future role aggregation are excluded. Use dry to validate the apply plan. GET-only; --check writes no reports.
+
+Inventory mode currently supports backend: rbac on vanilla and Deckhouse. Native Deckhouse AR/CAR requests fail clearly because accessLevel has no direct roleRef and controller-generated permissions cannot be inferred safely. Audit those through source=cluster after apply.

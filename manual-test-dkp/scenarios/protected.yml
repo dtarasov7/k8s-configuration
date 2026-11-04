@@ -1,0 +1,19 @@
+---
+manual_dkp_protected_grant:
+  id: protected-default
+  backend: rbac
+  subjects:
+  - kind: User
+    name: dkp-access:protected
+  roleRef:
+    kind: ClusterRole
+    name: view
+  scope:
+    namespaces:
+    - default
+k8s_configuration_grants: '{{ manual_dkp_grants_baseline + [manual_dkp_protected_grant]
+  }}'
+manual_dkp_namespaces:
+- dkp-access-dev
+- dkp-access-stage
+- default

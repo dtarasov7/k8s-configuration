@@ -1,9 +1,19 @@
 ---
-- name: install.yml - Check execution Python and PyYAML without installing packages
+- name: install.yml - Check execution Python without installing packages
   ansible.builtin.command:
     argv:
       - "{{ ansible_python_interpreter | default(ansible_facts.discovered_interpreter_python | default('/usr/bin/python3')) }}"
       - -c
-      - "import sys, yaml; assert sys.version_info >= (3, 8), 'Python 3.8+ required'"
+      - "import sys; assert sys.version_info >= (3, 8), 'Python 3.8+ required'"
+  changed_when: false
+  check_mode: false
+
+- name: install.yml - Check the installed kubectl without contacting the API
+  ansible.builtin.command:
+    argv:
+      - "{{ k8s_configuration_config_connection_kubectl }}"
+      - version
+      - --client
+      - --output=json
   changed_when: false
   check_mode: false

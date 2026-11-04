@@ -1,0 +1,10 @@
+---
+# Optional matching labels do not expand explicit RBAC namespace scope in CE.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dkp-access-dynamic
+  labels:
+    purpose: k8s-configuration-manual-dkp
+    project: access-test
+    environment: dev

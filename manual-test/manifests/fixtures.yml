@@ -1,0 +1,137 @@
+# Portable Kubernetes objects; no k3s, Istio or system roles.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: access-test-dev
+  labels:
+    purpose: k8s-configuration-manual-test
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: access-test-stage
+  labels:
+    purpose: k8s-configuration-manual-test
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: access-test-outside
+  labels:
+    purpose: k8s-configuration-manual-test
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: deploy-bot
+  namespace: access-test-dev
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: read-bot
+  namespace: access-test-dev
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: access-test-pod-logs
+  labels:
+    purpose: k8s-configuration-manual-test
+  namespace: access-test-dev
+rules:
+  - apiGroups:
+      - ''
+    resources:
+      - pods
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - ''
+    resources:
+      - pods/log
+    verbs:
+      - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: access-test-config-reader
+  labels:
+    purpose: k8s-configuration-manual-test
+  namespace: access-test-stage
+rules:
+  - apiGroups:
+      - ''
+    resources:
+      - configmaps
+    resourceNames:
+      - public-config
+    verbs:
+      - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: access-test-deployer
+  labels:
+    purpose: k8s-configuration-manual-test
+  namespace: access-test-dev
+rules:
+  - apiGroups:
+      - apps
+    resources:
+      - deployments
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups:
+      - ''
+    resources:
+      - configmaps
+    verbs:
+      - get
+      - list
+      - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: access-test-node-reader
+  labels:
+    purpose: k8s-configuration-manual-test
+rules:
+  - apiGroups:
+      - ''
+    resources:
+      - nodes
+    verbs:
+      - get
+      - list
+      - watch
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: public-config
+  namespace: access-test-stage
+data:
+  message: 'Non-secret RBAC test fixture: public-config'
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: private-config
+  namespace: access-test-stage
+data:
+  message: 'Non-secret RBAC test fixture: private-config'

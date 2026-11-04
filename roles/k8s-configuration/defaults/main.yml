@@ -1,27 +1,177 @@
 ---
-k8s_configuration_config:
-  schema_version: 1
-  mode: dry
-  platform: vanilla
-  connection:
-    kubeconfig: ""
-    validate_tls: true
-  management:
-    owner: ansible-access-manager
-    prune: false
-    prune_identities: false
-
-# users/groups/grants deliberately have no defaults: omitted != empty.
-k8s_configuration_export:
-  destination: ./k8s-configuration-export.yml
-k8s_configuration_report_path: ""
+# Публичные настройки плоские. Список grants намеренно не имеет значения по умолчанию.
+# Версия схемы настроек; перед выполнением роль проверяет поддерживаемое значение 1.
+k8s_configuration_config_schema_version: 1
+# Режим работы: dry строит план, apply применяет изменения, export выгружает назначения, matrix формирует CSV прав; plan — устаревший синоним dry.
+k8s_configuration_config_mode: dry
+# Платформа кластера: vanilla использует Kubernetes RBAC, deckhouse дополнительно включает поддержку API Deckhouse.
+k8s_configuration_config_platform: vanilla
+# Имя или путь к kubectl на узле выполнения; через него роль обращается к API кластера.
+k8s_configuration_config_connection_kubectl: kubectl
+# Включает проверку TLS-сертификата API; false отключает проверку сертификата в kubectl.
+k8s_configuration_config_connection_validate_tls: true
+# Тайм-аут обращения к API и выполнения процесса kubectl в секундах.
+k8s_configuration_config_connection_timeout_seconds: 30
+# Число повторов GET при временных ошибках; операции записи автоматически не повторяются.
+k8s_configuration_config_connection_retries: 2
+# Путь к kubeconfig на узле выполнения; пустая строка оставляет стандартный выбор kubeconfig средствами kubectl.
+k8s_configuration_config_connection_kubeconfig: ''
+# Контекст kubeconfig для подключения; пустая строка использует текущий контекст kubectl.
+k8s_configuration_config_connection_context: ''
+# PEM-содержимое доверенного CA для API; передаётся kubectl через временный файл на узле выполнения.
+k8s_configuration_config_connection_ca_content: ''
+# PEM-содержимое клиентского сертификата; передаётся kubectl через временный файл на узле выполнения.
+k8s_configuration_config_connection_cert_content: ''
+# PEM-содержимое закрытого ключа клиентского сертификата; передаётся kubectl через временный файл на узле выполнения.
+k8s_configuration_config_connection_key_content: ''
+# Разрешает управление и prune базовых AuthorizationRule/ClusterAuthorizationRule Deckhouse; требуется для backend: deckhouse.
+k8s_configuration_config_deckhouse_basic_authz: false
+# Закрепляет API-версию Deckhouse AuthorizationRule; пустая строка включает автоматический выбор доступной served-версии.
+k8s_configuration_config_deckhouse_api_versions_authorization_rule: ''
+# Закрепляет API-версию Deckhouse ClusterAuthorizationRule; пустая строка включает автоматический выбор доступной served-версии.
+k8s_configuration_config_deckhouse_api_versions_cluster_authorization_rule: ''
+# Дополнительные проверки готовности user-authz через API: список {path, pointer, equals или minimum}.
+k8s_configuration_config_deckhouse_ready_checks_user_authz: []
+# Имя status.conditions для ожидания готовности AR/CAR после применения; пустая строка отключает эту дополнительную проверку.
+k8s_configuration_config_deckhouse_authz_ready_condition: ''
+# Разрешает совместное использование backend: rbac и backend: deckhouse в желаемых назначениях.
+k8s_configuration_config_deckhouse_mixed_backends: false
+# Список {name, scopes: [namespace, cluster]} с разрешёнными областями для специальных ролей d8:* и user-authz:*.
+k8s_configuration_config_deckhouse_granular_roles: []
+# Список {key, value} меток для распознавания объектов контроллеров; защищает их от изменений и позволяет исключать из экспорта.
+k8s_configuration_config_deckhouse_controller_markers_labels: []
+# Список {key, value} аннотаций для распознавания объектов контроллеров; защищает их от изменений и позволяет исключать из экспорта.
+k8s_configuration_config_deckhouse_controller_markers_annotations: []
+# Префиксы имён для распознавания объектов контроллеров; защищает их от изменений и позволяет исключать из экспорта.
+k8s_configuration_config_deckhouse_controller_markers_name_prefixes: []
+# Идентификатор владельца управляемых объектов; используется в метках владения и при формировании детерминированных имён.
+k8s_configuration_config_management_owner: ansible-access-manager
+# Удаляет собственные объекты, отсутствующие в явно заданных разделах желаемого состояния, с учётом ограничений безопасности.
+k8s_configuration_config_management_prune: false
+# Список ссылок на существующие объекты с UID для явного принятия под управление; не разрешает удаление чужих объектов.
+k8s_configuration_config_management_adoption: []
+# Домен служебных меток владения; используется для определения объектов, которыми управляет роль.
+k8s_configuration_config_management_label_domain: access-manager.ansible.local
+# Ограничивает управление указанными namespace; null не ограничивает выборку, пустой список исключает namespaced-объекты.
+k8s_configuration_config_management_namespaces: null
+# Разрешает управление кластерными объектами без namespace; false исключает такие объекты из области управления.
+k8s_configuration_config_management_include_cluster_scoped: true
+# Максимальное число удалений в одном плане, включая удаления при замене binding; превышение блокирует выполнение.
+k8s_configuration_config_safety_max_deletions: 10
+# Разрешает prune при явно пустом разделе желаемого состояния; без разрешения очистка такого раздела блокируется.
+k8s_configuration_config_safety_allow_empty_desired: false
+# Разрешает удаление и повторное создание binding при изменении неизменяемого roleRef.
+k8s_configuration_config_safety_allow_binding_replacement: false
+# Имена namespace, в которых запрещены изменения и удаления объектов, кроме явно разрешённых исключений.
+k8s_configuration_config_safety_protected_namespaces:
+- kube-system
+- kube-public
+- kube-node-lease
+- default
+- loghouse
+# Префиксы защищённых namespace; блокируют изменения и удаления объектов в совпавших namespace, кроме явно разрешённых исключений.
+k8s_configuration_config_safety_protected_namespace_prefixes:
+- kube-
+- d8-
+# Точные имена namespace, для которых снимается защита по имени или префиксу; остальные ограничения сохраняются.
+k8s_configuration_config_safety_allowed_protected_namespaces: []
+# Список ссылок на объекты, которые запрещено изменять и удалять; используется для защиты аварийных и служебных назначений.
+k8s_configuration_config_safety_protected_objects: []
+# Включает серверную dry-run проверку перед настоящим apply; в режимах dry и Ansible check запросы проверки не отправляются.
+k8s_configuration_config_server_validation: false
+# Предельное время ожидания в секундах при проверке результата изменений и готовности объектов Deckhouse.
+k8s_configuration_config_wait_timeout_seconds: 60
+# Ожидаемый digest плана из dry; непустое значение блокирует apply, если вычисленный план отличается.
+k8s_configuration_config_expected_plan_digest: ''
+# Область экспорта: managed выбирает собственные назначения, scoped — назначения по спискам ролей и accessLevel.
+k8s_configuration_export_mode: managed
+# Список экспортируемых механизмов назначений: rbac и/или deckhouse.
+k8s_configuration_export_backends:
+- rbac
+- deckhouse
+# Имена ClusterRole для отбора RBAC-назначений при export_mode: scoped; определения ролей не экспортируются.
+k8s_configuration_export_cluster_roles: []
+# Список {namespace, name} для отбора назначений на Role при export_mode: scoped; определения ролей не экспортируются.
+k8s_configuration_export_roles: []
+# Уровни accessLevel для отбора AR/CAR при export_mode: scoped.
+k8s_configuration_export_access_levels: []
+# Точные имена namespace для экспорта namespaced-назначений; пустой список не ограничивает namespace.
+k8s_configuration_export_namespaces: []
+# Включает в экспорт кластерные назначения без namespace; действует независимо от export_namespaces.
+k8s_configuration_export_include_cluster_scoped: true
+# Исключает из экспорта объекты контроллеров; распознавание учитывает ownerReferences и настроенные маркеры.
+k8s_configuration_export_exclude_controller_generated: true
+# Разрешает частичный экспорт при наличии непереносимых назначений; ограничения фиксируются в отдельном аудите.
+k8s_configuration_export_allow_partial: false
+# Путь к YAML с экспортируемыми назначениями на Ansible controller; относительный путь считается от playbook_dir.
+k8s_configuration_export_destination: "{{ playbook_dir }}/output/{{ inventory_hostname }}/export.yml"
+# Путь к отдельному YAML-аудиту экспорта на Ansible controller; пустая строка отключает сохранение аудита.
+k8s_configuration_export_audit_destination: "{{ playbook_dir }}/output/{{ inventory_hostname }}/export-audit.yml"
+# Каталог для трёх CSV матрицы на Ansible controller; относительный путь считается от playbook_dir.
+k8s_configuration_matrix_output_dir: "{{ playbook_dir }}/output/{{ inventory_hostname }}"
+# Источник назначений: cluster читает текущие bindings, inventory использует grants из inventory и актуальные роли из API.
+k8s_configuration_matrix_source: cluster
+# Имя CSV с матрицей прав в matrix_output_dir; по умолчанию matrix.csv или matrix-inventory.csv в зависимости от matrix_source.
+k8s_configuration_matrix_filename: "{{ 'matrix-inventory.csv' if k8s_configuration_matrix_source == 'inventory' else 'matrix.csv' }}"
+# Имя CSV с источниками прав в matrix_output_dir; по умолчанию bindings.csv или bindings-inventory.csv в зависимости от matrix_source.
+k8s_configuration_matrix_bindings_filename: "{{ 'bindings-inventory.csv' if k8s_configuration_matrix_source == 'inventory' else 'bindings.csv' }}"
+# Имя CSV со сведениями о субъектах в matrix_output_dir; по умолчанию subjects.csv или subjects-inventory.csv в зависимости от matrix_source.
+k8s_configuration_matrix_subjects_filename: "{{ 'subjects-inventory.csv' if k8s_configuration_matrix_source == 'inventory' else 'subjects.csv' }}"
+# Область назначений матрицы: cluster учитывает все bindings, managed — только bindings с метками владельца роли.
+k8s_configuration_matrix_scope: cluster
+# Точные имена namespace для матрицы; пустой список не ограничивает выборку, отсутствующее имя вызывает ошибку.
+k8s_configuration_matrix_namespaces: []
+# Включает строки кластерных ресурсов и URL; false сохраняет namespaced-права, в том числе полученные через ClusterRoleBinding.
+k8s_configuration_matrix_include_cluster_scoped: true
+# Включает столбцы пользователей в матрицу с учётом остальных фильтров субъектов.
+k8s_configuration_matrix_subjects_users: true
+# Включает столбцы групп в матрицу; скрытые группы могут продолжать участвовать в наследовании прав.
+k8s_configuration_matrix_subjects_groups: true
+# Включает столбцы ServiceAccount и чтение их списка из API с учётом остальных фильтров.
+k8s_configuration_matrix_subjects_service_accounts: false
+# Выбирает namespace для матрицы: application исключает системные, system оставляет системные, all включает оба вида.
+k8s_configuration_matrix_namespace_mode: application
+# Имена и glob-маски системных namespace для namespace_mode; по умолчанию стандартные Kubernetes namespace и d8-* на Deckhouse.
+k8s_configuration_matrix_system_namespaces: "{{ ['kube-system', 'kube-public', 'kube-node-lease'] + (['d8-*'] if k8s_configuration_config_platform == 'deckhouse' else []) }}"
+# Имена и glob-маски включаемых namespace; пустой список не добавляет ограничений, остальные фильтры продолжают действовать.
+k8s_configuration_matrix_namespace_include: []
+# Имена и glob-маски namespace, исключаемых из матрицы после применения фильтров включения.
+k8s_configuration_matrix_namespace_exclude: []
+# Включает системных пользователей и группы, распознанных по matrix_system_subjects, с учётом остальных фильтров.
+k8s_configuration_matrix_include_system_subjects: false
+# Включает пользователей без локального Deckhouse User; для них учитываются только прямые назначения, без наследования от групп.
+k8s_configuration_matrix_include_external_users: false
+# Имена и glob-маски системных пользователей и групп для фильтра include_system_subjects; по умолчанию system:*.
+k8s_configuration_matrix_system_subjects: ['system:*']
+# Имена и glob-маски включаемых пользователей; для Deckhouse используется email, пустой список не ограничивает выборку.
+k8s_configuration_matrix_users_include: []
+# Имена и glob-маски исключаемых пользователей; для Deckhouse используется email.
+k8s_configuration_matrix_users_exclude: []
+# Имена и glob-маски включаемых групп; для Deckhouse используется spec.name, пустой список не ограничивает выборку.
+k8s_configuration_matrix_groups_include: []
+# Имена и glob-маски исключаемых групп; для Deckhouse используется spec.name.
+k8s_configuration_matrix_groups_exclude: []
+# Имена и glob-маски включаемых ServiceAccount в формате namespace/name; пустой список не ограничивает выборку.
+k8s_configuration_matrix_service_accounts_include: []
+# Имена и glob-маски исключаемых ServiceAccount в формате namespace/name.
+k8s_configuration_matrix_service_accounts_exclude: []
+# Имена и glob-маски namespace самих ServiceAccount для отбора столбцов; пустой список не ограничивает выборку.
+k8s_configuration_matrix_service_account_namespaces_include: []
+# Имена и glob-маски namespace самих ServiceAccount, столбцы которых исключаются из матрицы.
+k8s_configuration_matrix_service_account_namespaces_exclude: []
+# Убирает строки, где все видимые ячейки содержат только точки; строки с неизвестными правами (?) сохраняются.
+k8s_configuration_matrix_omit_empty_rows: true
+# Исключает субъектов с wildcard по apiGroups и resources без resourceNames, а также известных наследников; внешние User проверяются только по прямым правам.
+k8s_configuration_matrix_exclude_broad_subjects: true
+# Включает чтение членства из Deckhouse Group для наследования прав; явный справочник matrix_memberships действует и при false.
+k8s_configuration_matrix_resolve_group_membership: true
+# Справочник членства User/ServiceAccount в группах для отчёта: groups и complete обязательны; complete: true заменяет выведенный состав, false дополняет его.
+k8s_configuration_matrix_memberships: []
+# Односимвольный разделитель полей во всех трёх CSV матрицы; по умолчанию точка с запятой.
+k8s_configuration_matrix_csv_delimiter: ;
+# Путь к YAML-плану dry на Ansible controller; обязателен и непустой, при Ansible check запись только прогнозируется.
+k8s_configuration_report_path: "{{ playbook_dir }}/output/{{ inventory_hostname }}/dry.yml"
+# Скрывает чувствительные аргументы и результаты задач роли в выводе Ansible; по умолчанию включён.
 k8s_configuration_no_log: true
-
-# Optional TLS content, resolved by variables on the control node. The API
-# client materializes it in a private temporary directory on the execution host.
-k8s_configuration_hashi_vault_path: ""
-k8s_configuration_hashi_vault_path_password: ""
-k8s_configuration_local_certs_path: "./certs/"
+# Список {name, content} с готовым TLS-содержимым; name: ca_content, cert_content или key_content переопределяет соответствующий connection_*_content.
 k8s_configuration_certificates: []
-# Example entries: {name: ca_content, content: "{{ lookup('file', 'ca.pem') }}"}
-# Supported names: ca_content, cert_content, key_content.

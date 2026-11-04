@@ -1,16 +1,16 @@
 ---
-# Explicitly provide -i one-executor, -e @private-deckhouse-test-vars.yml.
+# Provide -i inventory, -e k8s_configuration_test_host=one-literal-executor
+# and -e @private-deckhouse-test-vars.yml.
 # Test vars must point to a disposable Deckhouse cluster and include its profile.
 - name: Verify configured Deckhouse test profile
-  hosts: all
+  hosts: "{{ k8s_configuration_test_host }}"
   gather_facts: false
   pre_tasks:
-    - name: Require explicit test configuration and authorization checks
+    - name: Require explicit test configuration
       ansible.builtin.assert:
         that:
-          - k8s_configuration_config.platform == 'deckhouse'
-          - k8s_configuration_config.mode == 'apply'
-          - k8s_configuration_config.access_checks | length >= 2
+          - k8s_configuration_config_platform == 'deckhouse'
+          - k8s_configuration_config_mode == 'apply'
   roles:
     - role: k8s-configuration
   tasks:

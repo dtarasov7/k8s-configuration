@@ -1,0 +1,19 @@
+---
+# Must refuse the protected default namespace even when it is in management scope.
+manual_test_protected_grant:
+  id: protected-default
+  backend: rbac
+  subjects:
+    - kind: User
+      name: access-test:protected
+  roleRef:
+    kind: ClusterRole
+    name: view
+  scope:
+    namespaces:
+      - default
+k8s_configuration_grants: "{{ manual_test_grants_baseline + [manual_test_protected_grant] }}"
+manual_test_namespaces:
+  - access-test-dev
+  - access-test-stage
+  - default

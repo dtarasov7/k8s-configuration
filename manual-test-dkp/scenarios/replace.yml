@@ -1,0 +1,16 @@
+---
+manual_dkp_replaced_grant:
+  id: temporary-reader
+  backend: rbac
+  subjects:
+  - kind: User
+    name: dkp-access-temporary@example.invalid
+  roleRef:
+    kind: ClusterRole
+    name: edit
+  scope:
+    namespaces:
+    - dkp-access-stage
+  target_name: dkp-access-temporary
+k8s_configuration_grants: '{{ (manual_dkp_grants_baseline | rejectattr(''id'',''equalto'',''temporary-reader'')
+  | list) + [manual_dkp_replaced_grant] }}'

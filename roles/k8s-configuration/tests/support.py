@@ -23,8 +23,40 @@ INFO = {
     "Group": ("deckhouse.io/v1alpha1", "groups", False),
     "AuthorizationRule": ("deckhouse.io/v1alpha1", "authorizationrules", True),
     "ClusterAuthorizationRule": ("deckhouse.io/v1", "clusterauthorizationrules", False),
+    "Module": ("deckhouse.io/v1alpha1", "modules", False),
+    "ModuleConfig": ("deckhouse.io/v1alpha1", "moduleconfigs", False),
 }
 VERBS = ["get", "list", "create", "patch", "delete"]
+
+
+def flat_settings(value, prefix):
+    """Translate test payloads into the public flat Ansible interface."""
+    value = copy.deepcopy(value)
+    if prefix == "k8s_configuration_config":
+        deck = value.get("deckhouse", {})
+        profile = deck.pop("profiles", {}).get(deck.pop("compatibility_profile", None), {})
+        api_names = {"User": "user", "Group": "group", "AuthorizationRule": "authorization_rule",
+                     "ClusterAuthorizationRule": "cluster_authorization_rule"}
+        if "api_versions" in profile:
+            profile["api_versions"] = {api_names[k]: v for k, v in profile["api_versions"].items()}
+        if "granular_roles" in profile:
+            profile["granular_roles"] = [{"name": name, "scopes": scopes}
+                                         for name, scopes in profile["granular_roles"].items()]
+        for key in ("labels", "annotations"):
+            if key in profile.get("controller_markers", {}):
+                profile["controller_markers"][key] = [{"key": k, "value": v}
+                                                     for k, v in profile["controller_markers"][key].items()]
+        deck.update(profile)
+        if "deckhouse" in value:
+            value["deckhouse"] = deck
+    result = {}
+    for key, item in value.items():
+        name = prefix + "_" + key.replace("-", "_")
+        if isinstance(item, dict):
+            result.update(flat_settings(item, name))
+        else:
+            result[name] = item
+    return result
 
 
 def config(deckhouse=False, **extra):
@@ -42,27 +74,17 @@ def config(deckhouse=False, **extra):
                 "compatibility_profile": "fixture",
                 "profiles": {
                     "fixture": {
-                        "deckhouse_image": "registry.invalid/deckhouse:v1.78.0",
                         "api_versions": {
                             k: INFO[k][0]
                             for k in (
-                                "User",
-                                "Group",
                                 "AuthorizationRule",
                                 "ClusterAuthorizationRule",
                             )
                         },
                         "mixed_backends": True,
-                        "password_updates": True,
                         "authz_ready_condition": "Ready",
                         "ready_checks": {
                             "user-authz": [probe],
-                            "user-authn": [
-                                dict(
-                                    probe,
-                                    path="/apis/apps/v1/namespaces/d8-user-authn/deployments/dex",
-                                )
-                            ],
                         },
                         "granular_roles": {"d8:use:role:viewer": ["namespace"]},
                     }
@@ -81,7 +103,7 @@ def grant(name="readers", **kw):
     result = {
         "id": name,
         "backend": "rbac",
-        "subjects": [{"kind": "Group", "source": "external", "name": "readers"}],
+        "subjects": [{"kind": "Group", "name": "readers"}],
         "roleRef": {"kind": "ClusterRole", "name": "view"},
         "scope": {"namespaces": ["dev"]},
     }
@@ -125,6 +147,14 @@ class FakeAPI(Client):
             }
         )
         for module in ("user-authz", "user-authn"):
+            self.store({
+                "apiVersion": "deckhouse.io/v1alpha1", "kind": "Module",
+                "metadata": {"name": module},
+                "status": {"phase": "Ready", "conditions": [
+                    {"type": "EnabledByModuleManager", "status": "True"},
+                    {"type": "IsReady", "status": "True"},
+                ]},
+            })
             self.objects["/apis/deckhouse.io/v1alpha1/moduleconfigs/" + module] = {
                 "metadata": {"uid": module, "resourceVersion": "1"},
                 "spec": {"enabled": True, "settings": {"enableMultiTenancy": True}},
@@ -172,6 +202,7 @@ class FakeAPI(Client):
                 + ".deckhouse.io"
             ] = {
                 "metadata": {"uid": plural, "resourceVersion": "1"},
+                "status": {"conditions": [{"type": "Established", "status": "True"}]},
                 "spec": {
                     "versions": [
                         {
@@ -222,14 +253,29 @@ class FakeAPI(Client):
             if path == "/version":
                 return {"gitVersion": "v1.30.0"}
             if path in ("/api", "/apis"):
-                return {"groups": [], "versions": ["v1"]}
+                if path == "/api":
+                    return {"kind": "APIVersions", "apiVersion": "v1", "versions": ["v1"]}
+                groups = {}
+                for version, _, _ in INFO.values():
+                    if "/" in version:
+                        group, v = version.split("/")
+                        groups.setdefault(group, {})[v] = {"groupVersion": version, "version": v}
+                return {
+                    "kind": "APIGroupList", "apiVersion": "v1",
+                    "groups": [
+                        {"name": g, "versions": list(vs.values()),
+                         "preferredVersion": list(vs.values())[0]}
+                        for g, vs in groups.items()
+                    ],
+                }
             resources = [
                 {"kind": k, "name": v[1], "namespaced": v[2], "verbs": VERBS}
                 for k, v in INFO.items()
                 if path == ("/api/" + v[0] if "/" not in v[0] else "/apis/" + v[0])
             ]
             if resources:
-                return {"resources": resources}
+                return {"kind": "APIResourceList", "apiVersion": "v1",
+                        "groupVersion": path.split("/", 2)[-1], "resources": resources}
             if path in self.objects:
                 return copy.deepcopy(self.objects[path])
             collection = []
@@ -301,9 +347,28 @@ class FakeAPI(Client):
         raise APIError(method, 405)
 
 
-def engine(api=None, cfg=None, users=None, groups=None, grants=None):
+def engine(api=None, cfg=None, grants=None):
     api, cfg = api or FakeAPI(), cfg or config()
-    inventory = validate_inventory(cfg, users, groups, grants)
+    inventory = validate_inventory(cfg, grants=grants)
     e = Engine(api, cfg, inventory)
     e.prepare()
     return e
+
+
+def render_settings(variables):
+    """Render the real task arguments and apply Ansible's module type validation."""
+    import yaml
+    from ansible.parsing.dataloader import DataLoader
+    from ansible.template import Templar
+    from ansible.executor.task_executor import remove_omit
+    from ansible.module_utils.common.arg_spec import ArgumentSpecValidator
+    from access_manager.settings import argument_spec, build_settings
+
+    variables = dict(variables, omit="__OMIT__")
+    arguments = yaml.safe_load((ROLE / "tasks/execute.yml").read_text())[0]["k8s_configuration"]
+    arguments = {k: v for k, v in arguments.items() if k not in ("users", "groups", "grants")}
+    params = remove_omit(Templar(loader=DataLoader(), variables=variables).template(arguments), "__OMIT__")
+    result = ArgumentSpecValidator(argument_spec()).validate(params)
+    if result.error_messages:
+        raise AssertionError(result.error_messages)
+    return build_settings(result.validated_parameters)

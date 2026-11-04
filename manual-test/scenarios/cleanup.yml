@@ -1,0 +1,5 @@
+---
+# Removes only grants owned by manual-redos8-access-test. Keeps fixtures and manual/foreign bindings.
+manual_test_prune: true
+manual_test_allow_empty: true
+k8s_configuration_grants: []

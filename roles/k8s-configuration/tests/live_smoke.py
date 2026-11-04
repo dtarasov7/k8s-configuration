@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Live fixture setup/verification, restricted to the disposable kind test context."""
 import argparse
+import csv
+import io
 import os
 import sys
 import time
@@ -12,6 +14,7 @@ from access_manager.client import Client
 from access_manager.schema import validate_config, validate_inventory, require
 from access_manager.reconcile import Engine
 from access_manager.export import export_state
+from access_manager.matrix import Matrix
 
 
 def main():
@@ -34,35 +37,6 @@ def main():
                 "namespaces": ["kam-role-test"],
                 "include_cluster_scoped": False,
             },
-            "access_checks": [
-                {
-                    "user": "kam-test-user",
-                    "resourceAttributes": {
-                        "namespace": "kam-role-test",
-                        "verb": "list",
-                        "resource": "pods",
-                    },
-                    "allowed": True,
-                },
-                {
-                    "user": "kam-test-user",
-                    "resourceAttributes": {
-                        "namespace": "default",
-                        "verb": "list",
-                        "resource": "pods",
-                    },
-                    "allowed": False,
-                },
-                {
-                    "user": "kam-test-user",
-                    "resourceAttributes": {
-                        "namespace": "kam-role-test",
-                        "verb": "get",
-                        "resource": "secrets",
-                    },
-                    "allowed": False,
-                },
-            ],
         }
     )
     c = Client(cfg["connection"])
@@ -88,7 +62,7 @@ def main():
         grant = {
             "id": "reader",
             "backend": "rbac",
-            "subjects": [{"kind": "User", "source": "external", "name": "kam-test-user"}],
+            "subjects": [{"kind": "User", "name": "kam-test-user"}],
             "roleRef": {"kind": "ClusterRole", "name": "view"},
             "scope": {"namespaces": ["kam-role-test"]},
         }
@@ -102,7 +76,6 @@ def main():
             # Replace roleRef safely, then restore it and verify least privilege.
             changed = dict(grant, roleRef={"kind": "ClusterRole", "name": "edit"})
             cfg["safety"]["allow_binding_replacement"] = True
-            cfg["access_checks"] = []
             replacement = Engine(c, cfg, validate_inventory(cfg, grants=[changed]))
             replacement.prepare()
             require(replacement.report()["summary"]["replace"] == 1, "Expected roleRef replacement")
@@ -139,13 +112,38 @@ def main():
             legacy_engine = Engine(c, cfg, validate_inventory(cfg, grants=[legacy]))
             legacy_engine.prepare()
             legacy_engine.apply()
+            # Exercise real JSON Patch, server dry-run and names containing colons.
+            legacy_changed = dict(legacy, subjects=legacy["subjects"] + [
+                {"kind": "Group", "name": "kam-test-extra-readers"}
+            ])
+            cfg["server_validation"] = True
+            patch = Engine(c, cfg, validate_inventory(cfg, grants=[legacy_changed]))
+            patch.prepare()
+            require(patch.report()["summary"]["update"] == 1, "Expected subject update")
+            require(patch.apply(), "JSON Patch did not report a change")
+            verify_patch = Engine(c, cfg, validate_inventory(cfg, grants=[legacy_changed]))
+            verify_patch.prepare()
+            require(not verify_patch.apply(), "JSON Patch was not idempotent")
+            audit = Matrix(c, cfg, {
+                "namespaces": ["kam-role-test"], "include_cluster_scoped": False,
+                "subjects": {"service_accounts": False}, "include_external_users": True,
+                "memberships": [{"kind": "User", "name": "kam-test-inherited",
+                                 "groups": ["kam-test-extra-readers"], "complete": True}],
+            }).report()
+            pod_rows = [row for row in csv.DictReader(io.StringIO(audit["files"]["matrix.csv"]), delimiter=";")
+                        if row["namespace"] == "kam-role-test" and row["resource"] == "pods"
+                        and row["api_group"] == "" and row["resource_name"] == "" and row["action"] == "standard"]
+            require(len(pod_rows) == 1, "Live matrix must contain one general Pod row")
+            require(pod_rows[0]["User:kam-test-user"].startswith("GLW"), "Live direct read mask incorrect")
+            require(pod_rows[0]["User:kam-test-inherited"] == "........", "External User must not inherit group grants")
+            require(pod_rows[0]["Group:kam-test-extra-readers"].startswith("GLW"), "Live group read mask incorrect")
             legacy_delete = Engine(
                 c, cfg, validate_inventory(cfg, grants=[dict(legacy, state="absent")])
             )
             legacy_delete.prepare()
             legacy_delete.apply()
             print(
-                "PASS: live RBAC, idempotence, export, replacement, revocation and negative access checks"
+                "PASS: live RBAC, JSON Patch/dry-run, idempotence, export/matrix, replacement, revocation and negative access checks"
             )
         else:
             namespace = c.get(path, missing=True)

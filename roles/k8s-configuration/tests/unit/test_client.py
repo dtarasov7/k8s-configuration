@@ -1,4 +1,3 @@
-import base64
 import copy
 import json
 import sys
@@ -66,7 +65,7 @@ class ClientTests(unittest.TestCase):
         finally:
             client.close()
 
-    def test_redirect_rejected(self):
+    def test_unreachable_redirect_fails_safely(self):
         client = Client(self.cfg)
         try:
             with self.assertRaises(AccessError):
@@ -100,12 +99,7 @@ class ClientTests(unittest.TestCase):
             client.close()
 
     def test_inline_ca_private_and_removed(self):
-        ca = self.fixture.doc["clusters"][0]["cluster"]
-        del ca["certificate-authority"]
-        ca["certificate-authority-data"] = base64.b64encode(
-            (self.fixture.root / "server.crt").read_bytes()
-        ).decode()
-        self.fixture.write_config()
+        self.cfg["ca_content"] = (self.fixture.root / "server.crt").read_text()
         client = Client(self.cfg)
         root = Path(client.tempdir)
         self.assertEqual(root.stat().st_mode & 0o777, 0o700)
@@ -114,12 +108,64 @@ class ClientTests(unittest.TestCase):
         client.close()
         self.assertFalse(root.exists())
 
-    def test_exec_and_auth_provider_rejected(self):
-        for unsupported in ("exec", "auth-provider", "as", "username"):
-            self.fixture.doc["users"][0]["user"] = {unsupported: {}}
+    def test_exec_credentials_supported(self):
+        plugin = self.fixture.root / "credential-plugin.py"
+        plugin.write_text(
+            "#!" + sys.executable + "\nimport json\nprint(" + repr(json.dumps({
+                "apiVersion": "client.authentication.k8s.io/v1", "kind": "ExecCredential",
+                "status": {"token": self.fixture.secret},
+            })) + ")\n"
+        )
+        plugin.chmod(0o700)
+        self.fixture.doc["users"][0]["user"] = {"exec": {
+            "apiVersion": "client.authentication.k8s.io/v1",
+            "command": str(plugin), "interactiveMode": "Never",
+        }}
+        self.fixture.write_config()
+        client = Client(self.cfg)
+        try:
+            self.assertEqual(client.get("/version")["gitVersion"], "v1.30.0")
+            self.assertEqual(self.fixture.headers[-1], "Bearer " + self.fixture.secret)
+        finally:
+            client.close()
+
+    def test_context_is_selected_and_pinned_without_changing_config(self):
+        self.fixture.doc["contexts"].append({
+            "name": "other", "context": {"cluster": "fixture", "user": "expired"},
+        })
+        self.fixture.doc["users"].append({"name": "expired", "user": {"token": "expired"}})
+        self.fixture.doc["current-context"] = "other"
+        self.fixture.write_config()
+        before = self.fixture.kubeconfig.read_bytes()
+        self.cfg["context"] = "fixture"
+        client = Client(self.cfg)
+        try:
+            self.assertIn("--context=fixture", client.argv)
+            client.get("/version")
+            self.assertEqual(self.fixture.kubeconfig.read_bytes(), before)
+        finally:
+            client.close()
+
+    def test_current_context_is_pinned_for_the_entire_run(self):
+        client = Client(self.cfg)
+        try:
+            self.fixture.doc["contexts"].append({
+                "name": "other", "context": {"cluster": "fixture", "user": "expired"},
+            })
+            self.fixture.doc["users"].append({"name": "expired", "user": {"token": "expired"}})
+            self.fixture.doc["current-context"] = "other"
             self.fixture.write_config()
-            with self.assertRaises(AccessError):
-                Client(self.cfg)
+            self.assertEqual(client.get("/version")["gitVersion"], "v1.30.0")
+            self.assertEqual(self.fixture.doc["current-context"], "other")
+        finally:
+            client.close()
+
+    def test_unknown_context_and_executable_fail_safely(self):
+        for overrides in ({"context": "absent"}, {"kubectl": "/missing/kubectl"}):
+            cfg = dict(self.cfg, **overrides)
+            with self.assertRaises(AccessError) as caught:
+                Client(cfg)
+            self.assertNotIn(self.fixture.secret, str(caught.exception))
 
 
 if __name__ == "__main__":

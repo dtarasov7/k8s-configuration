@@ -1,0 +1,12 @@
+---
+# Отозвать только два назначения из openldap.yml, сохранив baseline.
+manual_dkp_openldap_absent:
+- id: openldap-developers-view
+  backend: rbac
+  state: absent
+  scope: {namespaces: [dkp-access-dev]}
+- id: openldap-alice-config
+  backend: rbac
+  state: absent
+  scope: {namespaces: [dkp-access-stage]}
+k8s_configuration_grants: '{{ manual_dkp_grants_baseline + manual_dkp_openldap_absent }}'

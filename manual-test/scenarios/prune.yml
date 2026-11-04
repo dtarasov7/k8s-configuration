@@ -1,0 +1,3 @@
+---
+manual_test_prune: true
+k8s_configuration_grants: "{{ manual_test_grants_baseline | rejectattr('id', 'equalto', 'temporary-reader') | list }}"

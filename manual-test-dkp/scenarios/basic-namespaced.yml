@@ -1,0 +1,77 @@
+---
+manual_dkp_basic_authz: true
+manual_dkp_basic_grants:
+- id: basic-viewer
+  backend: deckhouse
+  subjects:
+  - kind: Group
+    name: dkp-access:basic-readers
+  accessLevel: User
+  scope:
+    namespaces:
+    - dkp-access-dev
+  options:
+    allowScale: false
+    portForwarding: false
+- id: basic-privileged
+  backend: deckhouse
+  subjects:
+  - kind: User
+    name: dkp-access-basic-privileged@example.invalid
+  accessLevel: PrivilegedUser
+  scope:
+    namespaces:
+    - dkp-access-dev
+  options:
+    allowScale: false
+    portForwarding: false
+- id: basic-editor
+  backend: deckhouse
+  subjects:
+  - kind: User
+    name: dkp-access-basic-editor@example.invalid
+  accessLevel: Editor
+  scope:
+    namespaces:
+    - dkp-access-dev
+  options:
+    allowScale: false
+    portForwarding: false
+- id: basic-admin
+  backend: deckhouse
+  subjects:
+  - kind: User
+    name: dkp-access-basic-admin@example.invalid
+  accessLevel: Admin
+  scope:
+    namespaces:
+    - dkp-access-dev
+  options:
+    allowScale: false
+    portForwarding: false
+- id: basic-scaler
+  backend: deckhouse
+  subjects:
+  - kind: User
+    name: dkp-access-basic-scaler@example.invalid
+  accessLevel: User
+  scope:
+    namespaces:
+    - dkp-access-dev
+  options:
+    allowScale: true
+    portForwarding: false
+- id: basic-forwarder
+  backend: deckhouse
+  subjects:
+  - kind: User
+    name: dkp-access-basic-forwarder@example.invalid
+  accessLevel: User
+  scope:
+    namespaces:
+    - dkp-access-dev
+  options:
+    allowScale: false
+    portForwarding: true
+k8s_configuration_grants: '{{ manual_dkp_grants_baseline + manual_dkp_basic_grants
+  }}'

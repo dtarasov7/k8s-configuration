@@ -1,12 +1,14 @@
 # Ansible-роль k8s-configuration: возможности и проект реализации
 
+> Актуальное ограничение: роль управляет только назначениями доступа. Описанные ниже создание, изменение и удаление User/Group, пароли, состав групп, параметры users/groups, password_updates и prune_identities удалены. Чтение User/Group сохранено только для матрицы. Актуальный интерфейс — roles/k8s-configuration/README.md.
+
 Статус: проект реализован в `roles/k8s-configuration/`; актуальный пользовательский контракт описан в README роли. Основание: `project.md`. Дата проверки документации: 23 октября 2026 года.
 
 ## 1. Назначение и границы
 
 Роль декларативно управляет назначениями прав через Kubernetes REST API в vanilla Kubernetes и Deckhouse. Для Deckhouse дополнительно управляет локальными идентичностями User/Group. Один inventory может содержать назначения стандартного RBAC и базовой модели Deckhouse; backend выбирается отдельно для каждого назначения.
 
-Результат работы — проверяемый план, применение изменений или экспорт существующих настроек. Роль не требует `kubernetes.core`, `kubectl` и установки агентов на узлах кластера.
+Результат работы — проверяемый план, применение изменений или экспорт существующих настроек. Роль использует установленный kubectl; kubernetes.core, Kubernetes SDK и установка агентов на узлах кластера не требуются.
 
 В vanilla Kubernetes обычные пользователи и группы не являются API-объектами: роль только ссылается на идентичности, которые предоставляет настроенная аутентификация. Запись группы в inventory не создаёт членство в OIDC/LDAP и не добавляет группу в сертификат. Это принципиальное ограничение обещания «управлять пользователями» в исходном документе. [Kubernetes: authentication](https://kubernetes.io/docs/reference/access-authn-authz/authentication/)
 
@@ -18,6 +20,7 @@
 | AuthorizationRule / ClusterAuthorizationRule | Нет | Через user-authz, базовая модель |
 | Назначение существующих гранулярных ролей Deckhouse | Нет | Через backend `rbac` |
 | Dry, apply, export, контроль владения и удаления | Да | Да |
+| Matrix: CSV текущего RBAC, источники и известное членство | Да | Да, включая декларации AR/CAR |
 | Динамический namespace selector | Нет в первой версии | Для ClusterAuthorizationRule при подтверждённой поддержке |
 
 В первую версию не входят: управление AD/LDAP/OIDC-провайдерами, выпуск сертификатов пользователей, настройка API server, установка модулей Deckhouse, создание Namespace, Role/ClusterRole, ServiceAccount и токенов, ProjectRoleBinding, управление 2FA/сессиями. Существующий ServiceAccount можно использовать как субъект назначения. Изменение прав в приложениях, например Grafana, также находится вне области роли.
@@ -52,106 +55,103 @@
 
 Это целевые профили тестирования, а не заявление о уже проверенной совместимости. При `connection: local` Python control node и интерпретатор модуля должны удовлетворять выбранному профилю; современный ansible-core нельзя просто запускать под Python 3.8. В матрице Ansible версия 2.19 поддерживает Python 3.8 на target, а 2.20 требует там минимум 3.9. Ветка 2.12 уже EOL. [Матрица Ansible](https://docs.ansible.com/projects/ansible/latest/reference_appendices/release_and_maintenance.html)
 
-Для кода модуля сохраняется синтаксис Python 3.8. Перед реализацией фиксируются patch-версии ansible-core, Python и PyYAML для каждого профиля. RED OS проверяется фактическим запуском, а не предположением о совместимости с RHEL. Системные пакеты и Python роль автоматически не обновляет.
+Для кода модуля сохраняется синтаксис Python 3.8. Перед реализацией фиксируются patch-версии ansible-core, Python и kubectl для каждого профиля. PyYAML нужен тестовой оснастке, но не runtime роли. RED OS проверяется фактическим запуском, а не предположением о совместимости с RHEL. Системные пакеты и Python роль автоматически не обновляет.
 
-Один запуск обслуживает один кластер и одного владельца конфигурации. Playbook выполняется на одном execution host с доступом к API; запуск роли на каждом control-plane узле не нужен. Параллельные apply для одного owner/cluster запрещаются сериализацией CI.
+Один запуск обслуживает один кластер и одного владельца конфигурации. После совместного применения hosts и --limit требуется ровно один execution host с доступом к API; localhost означает controller. Группы, all, списки и шаблоны допустимы, если итоговый набор содержит один узел. Несколько узлов блокируются до запуска kubectl; serial не обходит проверку ansible_play_hosts_all. Kubeconfig и auth plugins относятся к выбранному узлу; файлы dry/export/matrix — к Ansible controller; запуск роли на каждом control-plane узле не нужен. Параллельные apply для одного owner/cluster запрещаются сериализацией CI.
 
 ## 4. Контракт inventory
 
-Публичные переменные имеют префикс `k8s_configuration_`. Названия из `project.md` преобразуются так: `access_manager` → `k8s_configuration_config`, `access_users` → `k8s_configuration_users`, аналогично groups/grants/export. Не поддерживать два параллельных формата в первой версии.
+Публичные переменные имеют префикс `k8s_configuration_`. Настройки являются плоскими переменными: k8s_configuration_config_schema_version, k8s_configuration_config_mode, k8s_configuration_config_connection_kubeconfig, k8s_configuration_export_destination и k8s_configuration_matrix_output_dir. Users/groups/grants остаются предметными списками объектов. Плоские аргументы передаются непосредственно модулю; внутренние настройки движка собираются в Python.
 
 Пример желаемой конфигурации Deckhouse:
 
 ```yaml
-k8s_configuration_config:
-  schema_version: 1
-  mode: dry                     # dry | apply | export
-  platform: deckhouse           # vanilla | deckhouse
-  connection:
-    kubeconfig: /etc/ansible/kubeconfigs/dkp-prod.yaml
-    context: dkp-prod
-    validate_tls: true
-    timeout_seconds: 30
-  deckhouse:
-    basic_authz: true
-    compatibility_profile: dkp-prod-validated
-  management:
-    owner: platform-team
-    prune: false
-    prune_identities: false
-    adoption: []
-  safety:
-    max_deletions: 10
-    allow_empty_desired: false
-    allow_binding_replacement: false
-    protected_namespaces: [kube-system, kube-public, kube-node-lease, default, loghouse]
-    protected_namespace_prefixes: [kube-, d8-]
-    allowed_protected_namespaces: []
-
+k8s_configuration_config_schema_version: 1
+k8s_configuration_config_mode: dry
+k8s_configuration_config_platform: deckhouse
+k8s_configuration_config_connection_kubeconfig: /etc/ansible/kubeconfigs/dkp-prod.yaml
+k8s_configuration_config_connection_context: dkp-prod
+k8s_configuration_config_connection_validate_tls: true
+k8s_configuration_config_connection_timeout_seconds: 30
+k8s_configuration_config_deckhouse_basic_authz: true
+k8s_configuration_config_management_owner: platform-team
+k8s_configuration_config_management_prune: false
+k8s_configuration_config_management_prune_identities: false
+k8s_configuration_config_management_adoption: []
+k8s_configuration_config_safety_max_deletions: 10
+k8s_configuration_config_safety_allow_empty_desired: false
+k8s_configuration_config_safety_allow_binding_replacement: false
+k8s_configuration_config_safety_protected_namespaces:
+- kube-system
+- kube-public
+- kube-node-lease
+- default
+- loghouse
+k8s_configuration_config_safety_protected_namespace_prefixes:
+- kube-
+- d8-
+k8s_configuration_config_safety_allowed_protected_namespaces: []
 k8s_configuration_users:
-  - name: ivanov                  # metadata.name User CR
-    source: static
-    email: ivanov@example.org
-    password_hash: "{{ vault_ivanov_bcrypt }}"
-    password_policy: on_create  # on_create | managed
-
+- name: ivanov
+  source: static
+  email: ivanov@example.org
+  password_hash: '{{ vault_ivanov_bcrypt }}'
+  password_policy: on_create
 k8s_configuration_groups:
-  - name: developers             # metadata.name Group CR
-    source: static
-    claim_name: developers      # значение группы в identity
-    members: [ivanov]            # ссылки на users[].name
-
+- name: developers
+  source: static
+  claim_name: developers
+  members:
+  - ivanov
 k8s_configuration_grants:
-  - id: developers-edit
-    backend: rbac
-    subjects:
-      - kind: Group
-        source: static
-        name: developers
-    roleRef:
-      kind: ClusterRole
-      name: edit
-    scope:
-      namespaces: [application-dev, application-test]
-
-  - id: payments-admin
-    backend: deckhouse
-    subjects:
-      - kind: Group
-        source: external
-        name: K8S-Payments-Admins
-    accessLevel: Admin
-    scope:
-      namespaces: [payments-prod]
-    options:
-      portForwarding: true
-      allowScale: false
-
-  - id: review-reader
-    backend: deckhouse
-    subjects:
-      - kind: User
-        source: static
-        name: ivanov
-    accessLevel: User
-    scope:
-      namespace_selector:
-        matchLabels:
-          environment: review
-    options:
-      portForwarding: false
-      allowScale: false
+- id: developers-edit
+  backend: rbac
+  subjects:
+  - kind: Group
+    name: developers
+  roleRef:
+    kind: ClusterRole
+    name: edit
+  scope:
+    namespaces:
+    - application-dev
+    - application-test
+- id: payments-admin
+  backend: deckhouse
+  subjects:
+  - kind: Group
+    name: K8S-Payments-Admins
+  accessLevel: Admin
+  scope:
+    namespaces:
+    - payments-prod
+  options:
+    portForwarding: true
+    allowScale: false
+- id: review-reader
+  backend: deckhouse
+  subjects:
+  - kind: User
+    name: ivanov@example.org
+  accessLevel: User
+  scope:
+    namespace_selector:
+      matchLabels:
+        environment: review
+  options:
+    portForwarding: false
+    allowScale: false
 ```
 
-Идентификатор compatibility_profile обозначает проверенный набор возможностей; его имя произвольно, но профиль должен быть определён и протестирован в реализации. Это не возможность обойти проверки кластера.
+Именованные публичные compatibility profiles заменены плоскими настройками возможностей Deckhouse. Served API обнаруживаются автоматически либо закрепляются отдельными API pins. Проверяются scope и Established CRD со схемой нужной версии. Проверки образа и Deployment Deckhouse не выполняются. Готовность берётся из Module (phase Ready, EnabledByModuleManager=True, IsReady=True), а ModuleConfig читается при наличии. Отсутствие ModuleConfig не блокирует обычные назначения; CAR multitenancy требует явно подтверждённого enableMultiTenancy=true. Предпосылки перепроверяются перед apply.
 
-Для vanilla используются `platform: vanilla`, пустые users/groups и grants с `backend: rbac`. Для внешних субъектов `name` содержит точную строку после преобразований аутентификатора, включая настроенные префиксы. `source: external` заменяет частный случай `source: ad`: роль не проверяет наличие пользователя в каталоге. Пустой каталог пользователей не означает отсутствие допустимых внешних субъектов.
+Для vanilla используются `platform: vanilla`, пустые users/groups и grants с `backend: rbac`. Для внешних субъектов `name` содержит точную строку после преобразований аутентификатора, включая настроенные префиксы. Роль не проверяет наличие пользователя в каталоге. Пустой каталог пользователей не означает отсутствие допустимых внешних субъектов.
 
 ### Правила схемы
 
 - `id` уникален; поля неизвестного назначения отвергаются, а не игнорируются.
-- `subjects` — непустой список. Поддерживаются User, Group, ServiceAccount; для последнего обязательны namespace и `source: serviceaccount`.
-- `source: static` требует соответствующей записи локального каталога и платформы Deckhouse. User разрешается в email, Group — в claim_name. В манифесте не сохраняется поле source: Kubernetes его не знает.
+- `subjects` — непустой список. Поддерживаются User, Group, ServiceAccount; для последнего обязателен namespace.
+- Имена subjects передаются буквально: локальный User указывается по email, Group — по claim_name/spec.name. Поле source в subjects не используется.
 - Email локального пользователя задаётся в lowercase. Внешние имена не нормализуются произвольно. Проверяются коллизии фактических имён между локальными и внешними субъектами.
 - `scope` содержит ровно один вариант: `cluster: true`, непустой список `namespaces` либо непустой `namespace_selector`. Пустой selector запрещён как неявный доступ ко всем namespace.
 - `roleRef` разрешён только для rbac, `accessLevel/options` — только для deckhouse. Для Role проверяется существование в каждом namespace назначения.
@@ -188,7 +188,7 @@ API-версии AR v1alpha1 и CAR v1 — кандидаты профиля, а
 
 Гранулярные роли назначаются обычными bindings через rbac. Список их имён и допустимый scope берётся из проверенного профиля: существование ClusterRole само по себе не означает допустимость ClusterRoleBinding для неё. Роль не переводит уровни Editor/Admin в гранулярные роли автоматически. [Deckhouse: использование user-authz](https://deckhouse.io/modules/user-authz/usage.html)
 
-## 6. Dry, apply и export
+## 6. Dry, apply, export и matrix
 
 ### Plan
 
@@ -196,7 +196,7 @@ API-версии AR v1alpha1 и CAR v1 — кандидаты профиля, а
 
 План включает cluster identity, owner, версию схемы/профиля, create/update/delete/replace/noop, причины конфликтов и блокировок, прежний и новый scope, количество физических объектов. Удаления внутри replace входят в общий лимит. Производные объекты Deckhouse в список изменений не включаются.
 
-Для изменения полномочий используется `privilege_change: increase | decrease | mixed | unknown`, а не обещание точного boolean-анализа. Изменение произвольной ClusterRole, её агрегации или группы внешнего IdP не всегда позволяет доказать отношение прав. Неизвестный результат не равен отсутствию повышения. Включение portForwarding, расширение scope и смена состава privileged-группы явно отмечаются.
+Dry показывает операции с назначениями и изменение полей. Классификация privilege_change не используется: создание или удаление binding само по себе не доказывает изменение фактических прав.
 
 Опциональный `server_validation` использует запросы с `dryRun=All`, когда поддерживаются API/admission. Он используется только перед настоящим apply; в dry/check даже эти POST/PATCH не выполняются. Проверка ресурса в ещё не существующей цепочке зависимостей может быть неполной. Серверная dry-run проверяет API/admission, но не будущую работу контроллера. [Kubernetes: API concepts](https://kubernetes.io/docs/reference/using-api/api-concepts/)
 
@@ -216,33 +216,56 @@ API-версии AR v1alpha1 и CAR v1 — кандидаты профиля, а
 
 ### Export
 
-Режимы config.mode: `dry` (самостоятельный план), `apply`, `export`; `plan` остаётся совместимым синонимом dry. Dry читает кластер и выводит «Планируем добавить», «Планируем изменить», «Планируем удалить». Он не зависит от Ansible CLI-флагов. Apply --check прогнозирует изменения; --diff показывает очищенный before/after. Export --check читает фактическое состояние и проверяет запись файла, сохраняя режим export.
+Режимы config.mode: `dry` (самостоятельный план), `apply`, `export`, `matrix`; `plan` остаётся совместимым синонимом dry. Dry читает кластер и выводит «Планируем добавить», «Планируем изменить», «Планируем удалить». Он не зависит от Ansible CLI-флагов. Apply --check прогнозирует изменения; --diff показывает очищенный before/after. Export --check читает фактическое состояние и проверяет запись файла, сохраняя режим export.
 
 ```yaml
-k8s_configuration_export:
-  mode: scoped                       # managed | scoped
-  backends: [rbac, deckhouse]
-  cluster_roles: [view, edit, platform-reader]
-  roles:
-    - namespace: application-dev
-      name: application-developer
-  access_levels: [User, Editor]
-  namespaces: [application-dev, application-test]
-  include_cluster_scoped: false
-  exclude_controller_generated: true
-  include_identities: true
-  allow_partial: false
-  destination: ./exports/dkp-prod.yaml
-  audit_destination: ./exports/dkp-prod-audit.yaml
+k8s_configuration_export_mode: scoped
+k8s_configuration_export_backends:
+- rbac
+- deckhouse
+k8s_configuration_export_cluster_roles:
+- view
+- edit
+- platform-reader
+k8s_configuration_export_roles:
+- namespace: application-dev
+  name: application-developer
+k8s_configuration_export_access_levels:
+- User
+- Editor
+k8s_configuration_export_namespaces:
+- application-dev
+- application-test
+k8s_configuration_export_include_cluster_scoped: false
+k8s_configuration_export_exclude_controller_generated: true
+k8s_configuration_export_allow_partial: false
+k8s_configuration_export_destination: ./exports/dkp-prod.yaml
+k8s_configuration_export_audit_destination: ./exports/dkp-prod-audit.yaml
 ```
 
 Managed выбирает ресурсы данного owner, включая ручные изменения. Scoped выбирает и ручные объекты по явным фильтрам. Фильтры действуют совместно; CAR экспортируется целиком с selector, namespace-фильтр не обрезает его смысл.
 
-В destination сохранять непосредственно `k8s_configuration_users`, `k8s_configuration_groups`, `k8s_configuration_grants`, без обёртки inventory. Файл подключается через vars_files/group_vars или вставляется в vars inventory без правок. Конфигурацию соединения и Deckhouse profile задают отдельно для целевого кластера. Audit с UID/ownership/unsupported_fields хранится отдельно и не импортируется.
+В destination сохранять непосредственно `k8s_configuration_users`, `k8s_configuration_groups`, `k8s_configuration_grants`, без обёртки inventory. Файл подключается через vars_files/group_vars или вставляется в vars inventory без правок. Плоские настройки соединения и возможностей Deckhouse задают отдельно для целевого кластера. Audit с UID/ownership/unsupported_fields хранится отдельно и не импортируется.
 
-Выбранные самостоятельные User/Group и зависимости grants включаются в снимок. Для локального Deckhouse User сохранять bcrypt из API как password_hash: это позволяет создать его на другом кластере. Файл 0600, export всегда no_log и без diff содержимого; audit и консоль хешей не содержат. Перед хранением в Git использовать Ansible Vault. Токены, приватные ключи и сессии не экспортируются.
+Export содержит только k8s_configuration_grants с назначениями прав. User/Group, состав групп, пароли и их хеши не экспортируются, в том числе как зависимости. Имена в subjects сохраняются буквально. Файл имеет права 0600; для импорта используются существующие namespace и Role/ClusterRole.
 
 Неподдерживаемые поля/зависимости блокируют экспорт по умолчанию; allow_partial явно разрешает неполный снимок для аудита. Сохранять target_name для исходных имён. На исходном кластере unowned объекты требуют отдельного UID-bound adoption; export не захватывает владение. На целевом должны существовать Namespace и роли/ServiceAccount, на которые ссылаются grants; их определения эта роль не переносит.
+
+### Файлы dry/export/matrix
+
+Результаты этих режимов сохраняются на Ansible controller через delegate_to: localhost, local connection и become=false, с Python контроллера. Настройка localhost в inventory не требуется. kubectl продолжает работать на выбранном target host.
+
+Плоские переменные: k8s_configuration_report_path — полный путь плана dry; k8s_configuration_export_destination и k8s_configuration_export_audit_destination — inventory и аудит; k8s_configuration_matrix_output_dir — каталог CSV, а matrix_filename, matrix_bindings_filename, matrix_subjects_filename с префиксом k8s_configuration_ задают имена. По умолчанию все результаты находятся в playbook_dir/output/inventory_hostname: dry.yml, export.yml, export-audit.yml, matrix.csv, bindings.csv, subjects.csv. Относительные пути считаются от playbook_dir на controller. Нужные каталоги создаются, новые получают 0700; файлы 0600. --check не записывает файлы, --diff не показывает их содержимое. changed может означать локальную запись результатов без изменений API. Дополнительная проверка наличия старых словарей удалена.
+
+### Matrix — первый этап аудита
+
+Реализован самостоятельный config.mode: matrix; он читает кластер через установленный kubectl и сохраняет matrix.csv, bindings.csv, subjects.csv. Desired state/пароли не шаблонизируются. Публичные переменные k8s_configuration_matrix_* задают output_dir, scope (cluster по умолчанию либо managed), namespaces, include_cluster_scoped, subjects, resolve_group_membership, memberships и csv.delimiter. Полный контракт и пример: [README роли](roles/k8s-configuration/README.md).
+
+Строка: namespace/API group/resource/resourceNames либо nonResourceURL; столбец: User/Group/ServiceAccount. Маска GLWCUPDX соответствует get/list/watch/create/update/patch/delete/deletecollection; заглавная буква — прямой binding, строчная — известная группа, точка — отсутствие разрешения в выбранном RBAC при известном членстве, ? — неизвестная позиция из-за неполного членства. Прямое назначение выигрывает регистр, все цепочки сохраняются. Специальные verbs имеют отдельные строки Y/y/./?; wildcard сохраняется символически и раскрывается по discovery. Агрегация использует существующие rules, широкий grant проецируется на строки именованных объектов. RoleBinding не даёт cluster-scoped права.
+
+По умолчанию читается весь RBAC, включая ручные и производные назначения. Managed фильтрует ownership bindings и предупреждает о неполноте. Все необходимые коллекции/discovery должны быть прочитаны: ошибки останавливают отчёт до файлов. В Deckhouse используются обнаруженные served API без требования readiness/image pin: User/email, Group/claim и известное вложенное членство, AR/CAR как декларации и selector scopes. Декларации не создают виртуальных разрешений. Связи с производным RBAC подтверждаются только owner UID; при отсутствии связи reconciliation=unverified. Никакое имя binding само по себе не доказывает происхождение/сходимость.
+
+CSV UTF-8/LF, каталог 0700, файлы 0600, без хешей/токенов и без содержимого в --diff; --check не пишет файлы. Matrix выполняет только GET: SAR и операции записи в Kubernetes отсутствуют. Это не полный расчёт webhook/Node/ABAC, bypass system:masters, admission, действующих токенов и косвенного повышения прав.
 
 ## 7. Владение, удаление и защита от конфликтов
 
@@ -313,11 +336,11 @@ roles/k8s-configuration/
 
 ### API-клиент
 
-Базовый транспорт — стандартная библиотека Python (`urllib`, `ssl`, `json`) без requests; PyYAML нужен для безопасного чтения kubeconfig. Критические функции клиента тестируются отдельно. Использовать HTTPS с проверкой CA и hostname; endpoint задавать DNS-именем из сертификата.
+Базовый транспорт — установленный kubectl. Python сохраняет валидацию, desired state, планирование, экспорт и ограничения удаления. Собственного HTTP/TLS-клиента нет. Вызовы выполняются argv без shell, тела запросов и JSON Patch передаются через stdin. GET/POST/DELETE выполняются через kubectl --raw, PATCH — kubectl patch --type=json с минимальным versioned manifest. JSON Patch test UID/resourceVersion и DeleteOptions.preconditions сохраняются.
 
-Первая версия поддерживает один kubeconfig/context, bearer token/tokenFile и client certificate/key, включая data-поля. Относительные пути разрешаются относительно kubeconfig. Слияние KUBECONFIG, exec/auth-provider плагины, интерактивный OIDC refresh и impersonation исполнителя не поддерживаются: явная ошибка вместо частичного разбора. Секретные временные файлы — 0600 в каталоге 0700, удаление через finally; ошибки очистки отражаются без содержимого секрета. Не передавать credentials при redirect на другой origin.
+Kubeconfig и аутентификацию, включая exec credential plugins, обрабатывает kubectl. Путь задаётся через connection.kubeconfig, бинарник — connection.kubectl (default kubectl). Явный context либо однократно прочитанный current-context передаётся каждой команде без изменения kubeconfig. Auth plugins должны быть установлены на execution host и работать без интерактивного ввода. Допустим HTTPS, проверка TLS включена по умолчанию. timeout_seconds ограничивает запрос и процесс. Секреты не попадают в argv; необработанные stdout/stderr не возвращаются. TLS-файлы, временные манифесты и discovery cache — в каталоге 0700, файлы 0600, удаление в finally. Версия kubectl должна быть в пределах одной minor-версии от API server.
 
-Discovery определяет plural, scope и served versions. Профиль задаёт разрешённые версии/поля и проверенную семантику; не выбирать «самую новую» версию автоматически. Если CRD-схема недоступна, требуется заранее проверенный профиль и необходимые чтения ModuleConfig, иначе fail closed. Discovery не подтверждает работоспособность контроллера.
+Discovery определяет plural, scope и served versions. По умолчанию выбирается обслуживаемая версия с нужным видом ресурса; API pin позволяет явно закрепить её. Схема соответствующей версии CRD и состояние Established обязательны; отсутствие схемы блокирует запуск. Состояние Module проверяется отдельно: discovery не подтверждает готовность контроллера. ModuleConfig читается при наличии, а 403 не трактуется как отсутствие настроек.
 
 ```text
 GET    /version
@@ -337,7 +360,7 @@ GET-списки обходятся до конца через limit/continue. R
 
 ### Полномочия исполнителя
 
-Нужны discovery и get/list управляемых ресурсов, Namespace, referenced Role/ClusterRole; для apply — create/patch/delete только выбранных видов. В Deckhouse дополнительно read CRD/ModuleConfig в соответствии с профилем. Право создавать binding само по себе недостаточно: Kubernetes проверяет права назначающего либо специальное bind. Не выдавать cluster-admin автоматически. Для необязательных SubjectAccessReview требуются отдельные права. [Kubernetes: ограничения назначения прав](https://kubernetes.io/docs/reference/access-authn-authz/rbac/)
+Нужны discovery и get/list управляемых ресурсов, Namespace, referenced Role/ClusterRole; для apply — create/patch/delete только выбранных видов. В Deckhouse дополнительно read Module/CRD и чтение ModuleConfig при наличии; дополнительные Deployment-пробы — по явным настройкам. Право создавать binding само по себе недостаточно: Kubernetes проверяет права назначающего либо специальное bind. Не выдавать cluster-admin автоматически. [Kubernetes: ограничения назначения прав](https://kubernetes.io/docs/reference/access-authn-authz/rbac/)
 
 ### Секреты и отчёты
 
@@ -362,7 +385,7 @@ GET-списки обходятся до конца через limit/continue. R
 | Отказоустойчивость | обрыв API, частичный apply, перезапуск, недоступный контроллер; prune не продолжается после ошибки |
 | Доступ | положительные и отрицательные запросы для конкретных identities, в разрешённых и запрещённых namespace |
 
-Molecule использует Docker driver для execution environment, включая доступный RED OS 7.3-совместимый образ. Vanilla API поднимается отдельной тестовой оснасткой kind/k3s; kubectl в тестовой оснастке допустим, runtime роли от него не зависит. Deckhouse проверяется на настоящем выделенном стенде: установка одних CRD не тестирует контроллер/webhook. Для проверки деградации API нужен многоузловой стенд, но роль сама кластер не разворачивает. Systemd/privileged-контейнер не требуется, если в сценарии нет соответствующей зависимости.
+Molecule использует Docker driver для execution environment, включая доступный RED OS 7.3-совместимый образ. Vanilla API поднимается отдельной тестовой оснасткой kind/k3s; runtime роли и тестовая оснастка используют kubectl совместимой версии. Deckhouse проверяется на настоящем выделенном стенде: установка одних CRD не тестирует контроллер/webhook. Для проверки деградации API нужен многоузловой стенд, но роль сама кластер не разворачивает. Systemd/privileged-контейнер не требуется, если в сценарии нет соответствующей зависимости.
 
 Критерии готовности:
 
@@ -386,3 +409,91 @@ Molecule использует Docker driver для execution environment, вкл
 - Фактические username/group claims и префиксы, способ API-аутентификации исполнителя, границы owner и перечень защищённых назначений.
 
 До получения этих данных архитектуру и unit-тесты можно разрабатывать, но нельзя заявлять подтверждённую совместимость с конкретным кластером. Проверенные веб-страницы Deckhouse помечены как документация невыпущенной версии; приведённые сведения требуют сопоставления с документацией установленного релиза и его API. Исходный `project.md` сохранён без изменений.
+
+## Фильтры matrix (этап 1)
+
+По умолчанию скрыты пользователи/группы `system:*`, все столбцы ServiceAccount и системные namespace. Системными считаются `kube-system`, `kube-public`, `kube-node-lease`; для Deckhouse также `d8-*`. Namespace `default` остаётся прикладным. Классификацию можно полностью переопределить через `k8s_configuration_matrix_system_namespaces` и `k8s_configuration_matrix_system_subjects`.
+
+Все переменные ниже имеют префикс `k8s_configuration_matrix_`:
+
+| Суффикс переменной | Default | Назначение |
+| --- | --- | --- |
+| `namespace_mode` | `application` | `application`, `system` или `all` |
+| `system_namespaces` | см. выше | Имена/glob системных namespace |
+| `namespaces` | `[]` | Точные имена namespace; отсутствующее имя вызывает ошибку |
+| `namespace_include`, `namespace_exclude` | `[]` | Имена/glob namespace |
+| `include_system_subjects` | `false` | Показывать также системных пользователей/группы |
+| `include_external_users` | `false` | Включить User без локального Deckhouse User; по умолчанию внешние идентичности показываются только группами |
+| `system_subjects` | `['system:*']` | Имена/glob системных пользователей/групп |
+| `users_include`, `users_exclude` | `[]` | Имена/glob пользователей; для Deckhouse — email |
+| `groups_include`, `groups_exclude` | `[]` | Имена/glob групп; для Deckhouse — claim `spec.name` |
+| `subjects_service_accounts` | `false` | Показывать ServiceAccount |
+| `service_accounts_include`, `service_accounts_exclude` | `[]` | Имена/glob в формате `namespace/name` |
+| `service_account_namespaces_include`, `service_account_namespaces_exclude` | `[]` | Имена/glob namespace самих ServiceAccount |
+| `omit_empty_rows` | `true` | Убирать строки, где все видимые ячейки содержат только точки |
+| `exclude_broad_subjects` | `true` | Исключать широкие wildcard-назначения и известных участников групп |
+
+По умолчанию `k8s_configuration_matrix_exclude_broad_subjects: true` исключает группы, пользователей и включённые ServiceAccount с широким доступом: в одном правиле есть `apiGroups: ["*"]`, `resources: ["*"]`, а `resourceNames` отсутствует или пуст. Набор verbs может быть любым, в том числе только get/list/watch. Назначение учитывается в выбранной области: ClusterRoleBinding либо RoleBinding хотя бы в одном выбранном namespace. Даже администратор одного выбранного namespace будет исключён целиком из отчёта.
+
+Исключаются также известные локальные участники таких групп, ServiceAccount и вложенные группы; внешние User проверяются только по их прямым назначениям. Неизвестное внешнее членство не угадывается. Имена вроде cluster-admin сами по себе не являются критерием; правила с ограничением resourceNames, wildcard только в отдельной API-группе или перечислением конкретных ресурсов автоматически широкими не считаются. Это фильтр явных wildcard-назначений, а не доказательство отсутствия иных способов получить административный доступ.
+
+Правила исключённых субъектов не создают строки матрицы: иначе при неполном членстве оставшихся пользователей эти строки сохранялись бы как `?`. У этих субъектов удаляются все их назначения из источников отчёта, включая узкие. Другие скрытые группы продолжают участвовать в наследовании. Сводка показывает `excluded_broad_subjects` и `excluded_broad_subject_names` (все обнаруженные широкие субъекты, включая уже скрытых другими фильтрами). Чтобы вернуть широкие субъекты и их строки, задайте `k8s_configuration_matrix_exclude_broad_subjects: false`; остальные фильтры сохраняют действие.
+
+Локальные Deckhouse User и их группы читаются из Kubernetes при каждом запуске: email нормализуется в нижний регистр, учитываются Group (включая вложенность) и User.spec.groups. При resolve_group_membership=true локальное членство считается полным, не требуется справочник inventory. Чтение запрещённых/отсутствующих коллекций, циклы, потерянные ссылки и неоднозначные email/claims прерывают отчёт. При resolve_group_membership=false локальные User сохраняют неполное членство.
+
+По умолчанию include_external_users=false: внешние User скрыты, их прямые User-правила не создают строки. Внешние группы остаются в матрице без попытки восстановить LDAP-участников. В vanilla все User относятся к внешним. Для явного аудита User bindings включите переменную; показываются только прямые права заглавными буквами и точками. Переключатель влияет только на matrix, не на apply/export. Счётчик excluded_external_users показывает число скрытых внешних User.
+
+Glob чувствителен к регистру: `*`, `?`, `[abc]`; это не регулярное выражение. Пустой include не ограничивает выборку. Все ограничения пересекаются, exclude имеет приоритет над include. Явное включение имени не отменяет системный фильтр: для просмотра `kube-system` выберите `namespace_mode: system` либо `all`. Несовпадение glob с существующими именами допустимо и может дать пустой CSV с заголовком.
+
+Фильтры столбцов не меняют расчёт членства: скрытые группы, включая `system:authenticated`, продолжают предоставлять унаследованные права локальным Deckhouse пользователям и ServiceAccount. Фильтр namespace ресурса независим от namespace ServiceAccount. `include_cluster_scoped` управляет кластерными ресурсами/URL отдельно от выбора namespace. `<unknown>` сохраняется с предупреждением, поскольку область отсутствующего в discovery ресурса неизвестна. Символические строки `*`/`<all-scopes>` при ограничении namespace разворачиваются только в выбранные namespace и, если разрешено, `<cluster>`.
+
+Строки с `?` сохраняются даже без известных положительных прав. Если матрица остаётся большой из-за неполного членства, уточните `memberships`; `complete: true` допустим только для подтверждённого полного списка групп.
+
+`subjects.csv` содержит только выбранные столбцы. RBAC-записи `bindings.csv` относятся только к выбранным субъектам и строкам; имена скрытых групп сохраняются в источниках наследования. Декларации AR/CAR отбираются по субъектам (включая группы, предоставляющие права видимым субъектам) и namespace, а `resolved_namespaces` ограничивается выборкой. Поля самой декларации сохраняют исходные параметры и не являются вычисленными правами.
+
+Сводка содержит `filters`, `selected_namespaces`, `excluded_namespaces`, `excluded_subjects`, `omitted_empty_rows`. Счётчик субъектов относится к идентичностям, обнаруженным в области аудита; полного каталога внешних пользователей Kubernetes не предоставляет. Фильтры ограничивают отчёт, чтение discovery/RBAC остаётся кластерным. Предупреждение напоминает, что это отфильтрованный аудит.
+
+Обычные пользователи и группы в системных namespace:
+
+```yaml
+k8s_configuration_matrix_namespace_mode: system
+k8s_configuration_matrix_include_cluster_scoped: false
+```
+
+Только пользователи организации в namespace проектов:
+
+```yaml
+k8s_configuration_matrix_namespace_include: ['project-*']
+k8s_configuration_matrix_namespace_exclude: ['project-archive']
+k8s_configuration_matrix_users_include: ['*@example.org']
+k8s_configuration_matrix_users_exclude: ['bot-*']
+k8s_configuration_matrix_subjects_groups: false
+```
+
+Для полной выборки, включая системные записи, задайте `namespace_mode: all`, `include_system_subjects: true`, `include_external_users: true`, `subjects_service_accounts: true`, `omit_empty_rows: false`, `exclude_broad_subjects: false`, очистите `namespaces` и все include/exclude; оставьте `scope: cluster` и `include_cluster_scoped: true`.
+
+
+Для внешних User при включённом `include_external_users` рассчитываются только прямые назначения: заглавные буквы и точки, без наследования и `?`. Точка означает отсутствие прямого назначения, а не отсутствие доступа через группы. Локальность определяется совпадением имени субъекта с нормализованным `spec.email` прочитанного Deckhouse User. В vanilla все User внешние. В `subjects.csv` поле `rights_basis` равно `direct_only` для внешних User и `direct_and_groups` для остальных субъектов. `membership_complete` по-прежнему описывает полноту сведений о группах, а не режим расчёта. Даже явно переданные memberships не включают наследование для внешнего User. В bindings.csv для такого User сохраняются только его прямые источники; широкие группы не исключают его столбец через наследование.
+
+Файл dry содержит разделы add/change/remove и metadata (cluster_uid, cluster_version, owner, digest). Добавления и удаления описаны однократно без apiVersion/apiGroup и служебных metadata; в change.fields показаны только изменённые значения before/after. Замена отмечается replacement: true. adoption выводится только при принятии существующего объекта под управление; allow_collision — только при изменении аннотации Deckhouse. privilege_change удалён: отчёт не оценивает фактическое увеличение или уменьшение прав. После apply без изменений списки add/change/remove пусты. Для анализа разрешений используйте matrix. Диагностический результат модуля и обычный --diff сохраняют before/after; файл dry является их кратким представлением.
+
+Проверки access_checks удалены из роли: apply и prune не выполняют SubjectAccessReview. Для просмотра фактических прав с учётом содержимого ролей используйте matrix. Дополнительные проверки bindings после apply не добавлялись.
+
+Экспорт inventory использует компактный YAML: каждый subject записан в фигурных скобках, roleRef и scope — в одну строку. Схема переменных сохраняется, файл непосредственно импортируется как inventory.
+
+### Матрица по назначениям inventory
+
+```yaml
+k8s_configuration_config_mode: matrix
+k8s_configuration_matrix_source: inventory
+```
+
+source=cluster (по умолчанию) читает текущие bindings. source=inventory использует только k8s_configuration_grants и актуальные rules Role/ClusterRole из API: назначения, уже существующие в кластере, не читаются и не добавляются. Требуются явно заданные grants; [] означает пустой набор. Поддерживаются RoleBinding по namespaces, ClusterRoleBinding и state: absent (исключается). Несуществующие namespace/роли прерывают отчёт до записи файлов. Правила агрегированных ClusterRole берутся в текущем состоянии.
+
+Локальные User/Group и их членство читаются из Deckhouse, параметры k8s_configuration_users/groups и пароли не вычисляются. Сохраняются обычные фильтры, маски, прямые права внешних User и наследование локальных пользователей. Для столбцов внешних User включите k8s_configuration_matrix_include_external_users. Источник виден в summary.source, subjects.csv (inventory-binding) и bindings.csv (record_type=inventory-rbac).
+
+Файлы по умолчанию: matrix-inventory.csv, bindings-inventory.csv, subjects-inventory.csv на контроллере, отдельно от текущей матрицы. Их имена по-прежнему переопределяются через matrix_filename/matrix_bindings_filename/matrix_subjects_filename.
+
+Это права только от описанных назначений, а не полный эффективный доступ после apply: прочие bindings исключены, prune/adoption/ограничения удаления и допустимость применения не проверяются. Для проверки плана применения используйте dry. Новые User/Group из inventory и будущее изменение агрегированных ролей/токенов не прогнозируются. GET-only; --check не пишет CSV.
+
+На первом этапе source=inventory поддерживает только backend: rbac, в том числе на Deckhouse. Для backend: deckhouse (AR/CAR) роль завершает работу с ошибкой: accessLevel не является прямой ссылкой на роль, права производных bindings зависят от контроллера. Для таких назначений используйте source=cluster после apply; виртуальные разрешения AR/CAR не подставляются.

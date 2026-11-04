@@ -1,0 +1,6 @@
+---
+- name: Test Kubernetes access management
+  hosts: access_test
+  gather_facts: false
+  roles:
+    - role: ../roles/k8s-configuration

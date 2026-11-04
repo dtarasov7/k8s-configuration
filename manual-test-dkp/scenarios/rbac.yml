@@ -1,0 +1,49 @@
+---
+manual_dkp_rbac_grants:
+- id: rbac-logs
+  backend: rbac
+  subjects:
+  - kind: User
+    name: dkp-access:rbac-auditor
+  roleRef:
+    kind: Role
+    name: dkp-access-pod-logs
+  scope:
+    namespaces:
+    - dkp-access-dev
+- id: rbac-config
+  backend: rbac
+  subjects:
+  - kind: ServiceAccount
+    name: read-bot
+    namespace: dkp-access-dev
+  roleRef:
+    kind: Role
+    name: dkp-access-named-config
+  scope:
+    namespaces:
+    - dkp-access-stage
+- id: rbac-deployer
+  backend: rbac
+  subjects:
+  - kind: ServiceAccount
+    name: deploy-bot
+    namespace: dkp-access-dev
+  roleRef:
+    kind: Role
+    name: dkp-access-deployer
+  scope:
+    namespaces:
+    - dkp-access-dev
+- id: rbac-nodes
+  backend: rbac
+  subjects:
+  - kind: User
+    name: dkp-access:rbac-infra
+  roleRef:
+    kind: ClusterRole
+    name: dkp-access-node-reader
+  scope:
+    cluster: true
+k8s_configuration_grants: '{{ manual_dkp_grants_baseline + manual_dkp_rbac_grants
+  }}'

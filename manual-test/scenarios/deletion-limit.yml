@@ -1,0 +1,6 @@
+---
+# With baseline applied, any deletion exceeds the explicitly zero limit.
+manual_test_prune: true
+manual_test_allow_empty: true
+k8s_configuration_grants: []
+manual_test_max_deletions: 0

@@ -1,0 +1,22 @@
+---
+manual_dkp_basic_authz: true
+manual_dkp_selector_grant:
+  id: ce-selector-unsupported
+  backend: deckhouse
+  subjects:
+  - kind: User
+    name: dkp-access:ce-selector
+  accessLevel: User
+  scope:
+    namespace_selector:
+      matchLabels:
+        purpose: k8s-configuration-manual-dkp
+        project: access-test
+      matchExpressions:
+      - key: environment
+        operator: In
+        values:
+        - dev
+        - stage
+k8s_configuration_grants: '{{ manual_dkp_grants_baseline + [manual_dkp_selector_grant]
+  }}'

@@ -1,0 +1,76 @@
+---
+- name: output.yml - Save read-only results with the controller execution identity
+  delegate_to: localhost
+  connection: local
+  become: false
+  vars:
+    ansible_connection: local
+    ansible_become: false
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+    # EN: Compact only the saved dry projection; standard Ansible --diff uses full diagnostics.
+    # RU: Сокращается только сохраняемый dry-отчёт; обычный --diff использует полную диагностику.
+    _k8s_configuration_output_files: >-
+      {{
+        [{'path': k8s_configuration_report_path,
+          'content': k8s_configuration_result.plan | k8s_configuration_dry_report | k8s_configuration_compact_yaml}]
+        if k8s_configuration_config_mode in ['dry', 'plan'] else
+        ([{'path': k8s_configuration_export_destination,
+           'content': k8s_configuration_result.exported.inventory | k8s_configuration_compact_yaml}]
+         + ([{'path': k8s_configuration_export_audit_destination,
+              'content': (k8s_configuration_result.exported | dict2items
+                          | rejectattr('key', 'equalto', 'inventory') | list | items2dict) | to_nice_yaml}]
+            if k8s_configuration_export_audit_destination | length else []))
+        if k8s_configuration_config_mode == 'export' else
+        [{'path': k8s_configuration_matrix_output_dir ~ '/' ~ k8s_configuration_matrix_filename,
+          'content': k8s_configuration_result.matrix.files['matrix.csv']},
+         {'path': k8s_configuration_matrix_output_dir ~ '/' ~ k8s_configuration_matrix_bindings_filename,
+          'content': k8s_configuration_result.matrix.files['bindings.csv']},
+         {'path': k8s_configuration_matrix_output_dir ~ '/' ~ k8s_configuration_matrix_subjects_filename,
+          'content': k8s_configuration_result.matrix.files['subjects.csv']}]
+      }}
+    # Relative destinations are resolved against the playbook directory on the controller.
+    # RU: Относительные пути считаются от каталога playbook на контроллере, а не target host.
+    _k8s_configuration_output_paths: >-
+      {{ _k8s_configuration_output_files | map(attribute='path') | map('expanduser')
+         | map('regex_replace', '^(?!/)', playbook_dir ~ '/') | map('realpath') | list }}
+  block:
+    - name: output.yml - Validate distinct nonempty result file paths
+      ansible.builtin.assert:
+        that:
+          - _k8s_configuration_output_files | map(attribute='path') | map('trim') | reject('equalto', '') | list | length == _k8s_configuration_output_files | length
+          - _k8s_configuration_output_paths | unique | list | length == _k8s_configuration_output_paths | length
+          - k8s_configuration_config_mode != 'matrix' or (k8s_configuration_matrix_filename | length > 0 and k8s_configuration_matrix_bindings_filename | length > 0 and k8s_configuration_matrix_subjects_filename | length > 0)
+        fail_msg: Specify nonempty, distinct result file paths on the Ansible controller.
+        quiet: true
+
+    - name: output.yml - Inspect result directories on controller
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop: "{{ _k8s_configuration_output_paths | map('dirname') | unique | list }}"
+      register: _k8s_configuration_output_directories
+
+    - name: output.yml - Create missing result directories on controller
+      ansible.builtin.file:
+        path: "{{ item.item }}"
+        state: directory
+        mode: "{{ omit if item.stat.exists else '0700' }}"
+      loop: "{{ _k8s_configuration_output_directories.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: output.yml - Save result files on controller
+      ansible.builtin.copy:
+        content: "{{ item.0.content }}"
+        dest: "{{ item.1 }}"
+        mode: "0600"
+      loop: "{{ _k8s_configuration_output_files | zip(_k8s_configuration_output_paths) | list }}"
+      loop_control:
+        label: "{{ item.1 }}"
+      # Access reports may be sensitive or large. Display paths separately.
+      no_log: true
+      diff: false
+
+    - name: output.yml - Display controller result file paths
+      ansible.builtin.debug:
+        msg:
+          controller_files: "{{ _k8s_configuration_output_paths }}"

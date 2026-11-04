@@ -1,0 +1,16 @@
+---
+manual_test_updated_grant:
+  id: direct-reader
+  backend: rbac
+  subjects:
+    - kind: User
+      name: access-test:charlie-next
+  roleRef:
+    kind: ClusterRole
+    name: view
+  scope:
+    namespaces:
+      - access-test-dev
+  target_name: access-test:direct-reader
+k8s_configuration_grants: "{{ (manual_test_grants_baseline | rejectattr('id', 'equalto', 'direct-reader') | list) + [manual_test_updated_grant]\
+  \ }}"

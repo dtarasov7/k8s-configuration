@@ -1,0 +1,6 @@
+---
+- name: Test Deckhouse access management
+  hosts: access_test_dkp
+  gather_facts: false
+  roles:
+    - role: ../roles/k8s-configuration

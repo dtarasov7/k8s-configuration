@@ -1,0 +1,7 @@
+---
+- name: matrix.yml - Display matrix scope and limitations
+  ansible.builtin.debug:
+    msg:
+      summary: "{{ k8s_configuration_result.matrix.summary }}"
+      warnings: "{{ k8s_configuration_result.matrix.warnings }}"
+

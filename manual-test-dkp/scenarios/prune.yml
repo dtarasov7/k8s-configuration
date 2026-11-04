@@ -1,0 +1,4 @@
+---
+k8s_configuration_grants: '{{ (manual_dkp_grants_baseline | rejectattr(''id'', ''equalto'',
+  ''temporary-reader'') | list) }}'
+manual_dkp_prune: true

@@ -1,0 +1,5 @@
+---
+# With baseline applied, dry/apply must refuse an empty destructive desired state.
+manual_test_prune: true
+manual_test_allow_empty: false
+k8s_configuration_grants: []

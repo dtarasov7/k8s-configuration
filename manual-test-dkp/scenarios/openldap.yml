@@ -1,0 +1,20 @@
+---
+# Дополнить baseline двумя назначениями реальным субъектам OpenLDAP.
+# При отличающихся claims переопределите эти переменные результатами auth whoami.
+manual_dkp_openldap_group: developers
+manual_dkp_openldap_user: alice
+manual_dkp_openldap_grants:
+- id: openldap-developers-view
+  backend: rbac
+  subjects:
+  - {kind: Group, name: '{{ manual_dkp_openldap_group }}'}
+  roleRef: {kind: ClusterRole, name: view}
+  scope: {namespaces: [dkp-access-dev]}
+- id: openldap-alice-config
+  backend: rbac
+  subjects:
+  - {kind: User, name: '{{ manual_dkp_openldap_user }}'}
+  roleRef: {kind: Role, name: dkp-access-named-config}
+  scope: {namespaces: [dkp-access-stage]}
+k8s_configuration_grants: '{{ manual_dkp_grants_baseline + manual_dkp_openldap_grants }}'
+k8s_configuration_matrix_include_external_users: true

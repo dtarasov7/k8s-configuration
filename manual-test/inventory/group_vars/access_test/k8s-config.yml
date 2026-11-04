@@ -1,0 +1,142 @@
+---
+# Automatically loaded for the access_test inventory group.
+# Baseline: 11 grants, 12 bindings, 36 access checks; dry by default.
+manual_test_mode: dry
+manual_test_kubeconfig: /etc/rancher/k3s/k3s.yaml
+manual_test_kubectl: /usr/local/bin/kubectl
+manual_test_prune: false
+manual_test_allow_empty: false
+manual_test_allow_replacement: false
+k8s_configuration_config_schema_version: 1
+k8s_configuration_config_mode: '{{ manual_test_mode }}'
+k8s_configuration_config_platform: vanilla
+k8s_configuration_config_connection_kubectl: '{{ manual_test_kubectl }}'
+k8s_configuration_config_connection_kubeconfig: '{{ manual_test_kubeconfig }}'
+k8s_configuration_config_connection_validate_tls: true
+k8s_configuration_config_connection_timeout_seconds: 30
+k8s_configuration_config_management_owner: manual-redos8-access-test
+k8s_configuration_config_management_namespaces: '{{ manual_test_namespaces }}'
+k8s_configuration_config_management_include_cluster_scoped: true
+k8s_configuration_config_management_prune: '{{ manual_test_prune | bool }}'
+k8s_configuration_config_management_adoption: '{{ manual_test_adoption }}'
+k8s_configuration_config_safety_max_deletions: '{{ manual_test_max_deletions }}'
+k8s_configuration_config_safety_allow_empty_desired: '{{ manual_test_allow_empty | bool }}'
+k8s_configuration_config_safety_allow_binding_replacement: '{{ manual_test_allow_replacement | bool }}'
+k8s_configuration_export_mode: '{{ manual_test_export_scope | default("managed") }}'
+k8s_configuration_export_backends:
+- rbac
+k8s_configuration_export_cluster_roles:
+- view
+- edit
+- admin
+- access-test-node-reader
+k8s_configuration_export_roles:
+- namespace: access-test-dev
+  name: access-test-pod-logs
+- namespace: access-test-stage
+  name: access-test-config-reader
+- namespace: access-test-dev
+  name: access-test-deployer
+k8s_configuration_export_namespaces:
+- access-test-dev
+- access-test-stage
+k8s_configuration_export_include_cluster_scoped: true
+k8s_configuration_export_allow_partial: false
+k8s_configuration_export_destination: '{{ playbook_dir }}/output/{{ inventory_hostname }}/export.yml'
+k8s_configuration_export_audit_destination: '{{ playbook_dir }}/output/{{ inventory_hostname }}/export-audit.yml'
+manual_test_grants_baseline:
+- id: group-readers
+  backend: rbac
+  subjects:
+  - {kind: Group, name: 'access-test:readers'}
+  roleRef: {kind: ClusterRole, name: view}
+  scope: {namespaces: [access-test-dev, access-test-stage]}
+- id: group-developers
+  backend: rbac
+  subjects:
+  - {kind: Group, name: 'access-test:developers'}
+  roleRef: {kind: ClusterRole, name: edit}
+  scope: {namespaces: [access-test-dev]}
+- id: direct-reader
+  backend: rbac
+  subjects:
+  - {kind: User, name: 'access-test:charlie'}
+  roleRef: {kind: ClusterRole, name: view}
+  scope: {namespaces: [access-test-dev]}
+  target_name: access-test:direct-reader
+- id: audit-logs
+  backend: rbac
+  subjects:
+  - {kind: User, name: 'access-test:auditor'}
+  roleRef: {kind: Role, name: access-test-pod-logs}
+  scope: {namespaces: [access-test-dev]}
+- id: named-config
+  backend: rbac
+  subjects:
+  - {kind: User, name: 'access-test:config-reader'}
+  roleRef: {kind: Role, name: access-test-config-reader}
+  scope: {namespaces: [access-test-stage]}
+- id: namespace-admin
+  backend: rbac
+  subjects:
+  - {kind: User, name: 'access-test:tenant-admin'}
+  roleRef: {kind: ClusterRole, name: admin}
+  scope: {namespaces: [access-test-stage]}
+- id: cluster-nodes
+  backend: rbac
+  subjects:
+  - {kind: User, name: 'access-test:infra'}
+  - {kind: Group, name: 'access-test:ops'}
+  roleRef: {kind: ClusterRole, name: access-test-node-reader}
+  scope: {cluster: true}
+- id: deploy-bot
+  backend: rbac
+  subjects:
+  - {kind: ServiceAccount, name: deploy-bot, namespace: access-test-dev}
+  roleRef: {kind: Role, name: access-test-deployer}
+  scope: {namespaces: [access-test-dev]}
+- id: cross-namespace-bot
+  backend: rbac
+  subjects:
+  - {kind: ServiceAccount, name: read-bot, namespace: access-test-dev}
+  roleRef: {kind: ClusterRole, name: view}
+  scope: {namespaces: [access-test-stage]}
+- id: upgrade-candidate
+  backend: rbac
+  subjects:
+  - {kind: User, name: 'access-test:upgrader'}
+  roleRef: {kind: ClusterRole, name: view}
+  scope: {namespaces: [access-test-dev]}
+  target_name: access-test-upgrade
+- id: temporary-reader
+  backend: rbac
+  subjects:
+  - {kind: User, name: 'access-test:temporary'}
+  roleRef: {kind: ClusterRole, name: view}
+  scope: {namespaces: [access-test-dev]}
+  target_name: access-test-temporary
+manual_test_namespaces:
+- access-test-dev
+- access-test-stage
+manual_test_adoption: []
+manual_test_max_deletions: 20
+k8s_configuration_grants: '{{ manual_test_grants_baseline }}'
+ansible_become: true
+k8s_configuration_report_path: '{{ playbook_dir }}/output/{{ inventory_hostname }}/dry.yml'
+k8s_configuration_matrix_output_dir: '{{ playbook_dir }}/output/{{ inventory_hostname }}'
+k8s_configuration_matrix_source: cluster
+k8s_configuration_matrix_filename: "{{ 'matrix-inventory.csv' if k8s_configuration_matrix_source == 'inventory' else 'matrix.csv' }}"
+k8s_configuration_matrix_bindings_filename: "{{ 'bindings-inventory.csv' if k8s_configuration_matrix_source == 'inventory' else 'bindings.csv' }}"
+k8s_configuration_matrix_subjects_filename: "{{ 'subjects-inventory.csv' if k8s_configuration_matrix_source == 'inventory' else 'subjects.csv' }}"
+k8s_configuration_matrix_namespace_mode: application
+k8s_configuration_matrix_namespace_include: []
+k8s_configuration_matrix_namespace_exclude: []
+k8s_configuration_matrix_include_system_subjects: false
+k8s_configuration_matrix_subjects_service_accounts: false
+k8s_configuration_matrix_users_include: []
+k8s_configuration_matrix_users_exclude: []
+k8s_configuration_matrix_groups_include: []
+k8s_configuration_matrix_groups_exclude: []
+k8s_configuration_matrix_omit_empty_rows: true
+k8s_configuration_matrix_exclude_broad_subjects: true
+k8s_configuration_matrix_include_external_users: false

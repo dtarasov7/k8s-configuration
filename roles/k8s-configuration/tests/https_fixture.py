@@ -5,7 +5,7 @@ import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit, parse_qs
+from urllib.parse import urlsplit, parse_qs, quote, unquote
 
 import yaml
 from support import FakeAPI
@@ -66,6 +66,9 @@ class HTTPFixture:
                 if self.headers.get("Authorization") != "Bearer " + fixture.secret:
                     self.send_response(401)
                     self.end_headers()
+                    self.wfile.write(json.dumps({"kind": "Status", "apiVersion": "v1",
+                                                "status": "Failure", "reason": "Unauthorized",
+                                                "code": 401, "message": "Unauthorized"}).encode())
                     return
                 if uri.path == "/redirect":
                     self.send_response(302)
@@ -75,21 +78,42 @@ class HTTPFixture:
                 if uri.path == "/forbidden":
                     self.send_response(403)
                     self.end_headers()
-                    self.wfile.write(json.dumps({"message": fixture.secret}).encode())
+                    self.wfile.write(json.dumps({"kind": "Status", "apiVersion": "v1",
+                                                "status": "Failure", "reason": "Forbidden",
+                                                "code": 403, "message": fixture.secret}).encode())
                     return
                 body = None
-                if self.headers.get("Content-Length"):
+                if self.headers.get("Transfer-Encoding") == "chunked":
+                    payload = bytearray()
+                    while True:
+                        size = int(self.rfile.readline().split(b";", 1)[0], 16)
+                        if not size:
+                            self.rfile.readline()
+                            break
+                        payload.extend(self.rfile.read(size))
+                        self.rfile.read(2)
+                    body = json.loads(payload)
+                elif self.headers.get("Content-Length"):
                     body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 try:
+                    # Go's URL encoder leaves ':' unescaped; the fixture stores
+                    # canonical escaped segments, as the original Python tests do.
+                    api_path = "/".join(quote(unquote(p), safe="") for p in uri.path.split("/"))
                     result = fixture.api.request(
                         self.command,
-                        uri.path,
+                        api_path,
                         body,
                         {k: v[0] for k, v in parse_qs(uri.query).items()},
                     )
                     code = 200
                 except APIError as exc:
-                    code, result = exc.status, {"message": "redacted fixture error"}
+                    reasons = {401: "Unauthorized", 403: "Forbidden", 404: "NotFound",
+                               409: "Conflict", 422: "Invalid", 500: "InternalError"}
+                    code, result = exc.status, {
+                        "kind": "Status", "apiVersion": "v1", "status": "Failure",
+                        "reason": reasons.get(exc.status, "InternalError"),
+                        "code": exc.status, "message": "redacted fixture error",
+                    }
                 except AccessError:
                     code, result = 500, {"message": "redacted fixture error"}
                 self.send_response(code)

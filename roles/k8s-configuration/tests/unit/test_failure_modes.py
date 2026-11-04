@@ -34,7 +34,7 @@ class FailureModes(unittest.TestCase):
     def test_patch_response_lost_is_reconciled(self):
         api = FakeAPI()
         engine(api, grants=[grant()]).apply()
-        new = grant(subjects=[{"kind": "User", "source": "external", "name": "new-user"}])
+        new = grant(subjects=[{"kind": "User", "name": "new-user"}])
         e = engine(api, grants=[new])
         original = api.request
 
@@ -53,7 +53,7 @@ class FailureModes(unittest.TestCase):
         api = FakeAPI()
         engine(api, grants=[grant()]).apply()
         e = engine(
-            api, grants=[grant(subjects=[{"kind": "User", "source": "external", "name": "new"}])]
+            api, grants=[grant(subjects=[{"kind": "User", "name": "new"}])]
         )
         original = api.request
 
@@ -123,21 +123,6 @@ class FailureModes(unittest.TestCase):
         with self.assertRaises(AccessError):
             engine(api, grants=[grant()])
 
-    def test_password_not_in_digest_but_policy_is(self):
-        api = FakeAPI()
-        user = {
-            "name": "jane",
-            "source": "static",
-            "email": "jane@example.org",
-            "password_hash": HASH,
-        }
-        first = engine(api, config(True), users=[user])
-        changed = dict(user, password_hash="$2b$12$" + "b" * 53)
-        second = engine(api, config(True), users=[changed])
-        self.assertEqual(first.digest, second.digest)
-        third = engine(api, config(True), users=[dict(changed, password_policy="managed")])
-        self.assertNotEqual(second.digest, third.digest)
-        self.assertNotIn(HASH, json.dumps(first.report()))
 
     def test_service_account_api_default_is_idempotent(self):
         api = FakeAPI()
@@ -152,7 +137,6 @@ class FailureModes(unittest.TestCase):
             subjects=[
                 {
                     "kind": "ServiceAccount",
-                    "source": "serviceaccount",
                     "namespace": "dev",
                     "name": "runner",
                 }
@@ -165,7 +149,7 @@ class FailureModes(unittest.TestCase):
                 obj["subjects"][0]["apiGroup"] = ""
         self.assertFalse(engine(api, grants=[g]).apply())
 
-    def test_unsupported_identity_dependency_does_not_export_grant(self):
+    def test_identity_fields_do_not_affect_assignment_export(self):
         api = FakeAPI()
         user = {
             "name": "jane",
@@ -173,13 +157,15 @@ class FailureModes(unittest.TestCase):
             "email": "jane@example.org",
             "password_hash": HASH,
         }
-        g = grant(subjects=[{"kind": "User", "source": "static", "name": "jane"}])
-        engine(api, config(True), users=[user], grants=[g]).apply()
-        api.objects["/apis/deckhouse.io/v1/users/jane"]["spec"]["ttl"] = "1h"
-        out = export_state(engine(api, config(True)), {"mode": "managed", "allow_partial": True})
-        self.assertFalse(out["inventory"]["k8s_configuration_grants"])
-        self.assertFalse(out["inventory"]["k8s_configuration_users"])
-        self.assertTrue(any(not r["importable"] for r in out["audit"]))
+        g = grant(subjects=[{"kind": "User", "name": "jane@example.org"}])
+        api.store({"apiVersion": "deckhouse.io/v1", "kind": "User",
+                   "metadata": {"name": "jane"},
+                   "spec": {"email": user["email"], "password": HASH, "ttl": "1h"}})
+        engine(api, config(True), grants=[g]).apply()
+        out = export_state(engine(api, config(True)), {"mode": "managed"})
+        self.assertTrue(out["inventory"]["k8s_configuration_grants"])
+        self.assertEqual(set(out["inventory"]), {"k8s_configuration_grants"})
+        self.assertTrue(all(r["source"]["kind"] not in ("User", "Group") for r in out["audit"]))
         self.assertNotIn(HASH, json.dumps(out))
 
     def test_legacy_rbac_path_segment_name_round_trip(self):
@@ -192,33 +178,35 @@ class FailureModes(unittest.TestCase):
         self.assertEqual(engine(api, grants=entries).report()["summary"]["create"], 0)
         self.assertFalse(engine(api, grants=[g]).apply())
 
-    def test_failed_positive_check_blocks_stale_prune(self):
+    def test_prune_does_not_require_authorization_checks(self):
         api = FakeAPI()
         engine(api, grants=[grant("old")]).apply()
-        cfg = config(
-            management={"prune": True},
-            wait_timeout_seconds=1,
-            access_checks=[
-                {
-                    "user": "readers",
-                    "resourceAttributes": {"namespace": "dev", "verb": "list", "resource": "pods"},
-                    "allowed": True,
-                }
-            ],
-        )
-        e = engine(api, cfg, grants=[grant("new")])
+        api.calls.clear()
         api.access_allowed = False
-        with self.assertRaises(AccessError):
-            e.apply()
-        self.assertFalse(any(c[0] == "DELETE" for c in api.calls))
-        self.assertTrue(e.changed)
+        e = engine(api, config(management={"prune": True}), grants=[grant("new")])
+        self.assertTrue(e.apply())
+        self.assertTrue(any(c[0] == "DELETE" for c in api.calls))
+        self.assertFalse(any("subjectaccessreviews" in c[1] for c in api.calls))
+
+    def test_deckhouse_without_ready_condition_applies_without_sar(self):
+        api = FakeAPI()
+        cfg = config(True)
+        cfg["deckhouse"]["profiles"]["fixture"]["authz_ready_condition"] = None
+        grant_spec = {
+            "id": "basic", "backend": "deckhouse", "accessLevel": "User",
+            "subjects": [{"kind": "Group", "name": "readers"}],
+            "scope": {"namespaces": ["dev"]},
+        }
+        self.assertTrue(engine(api, cfg, grants=[grant_spec]).apply())
+        self.assertFalse(engine(api, cfg, grants=[grant_spec]).apply())
+        self.assertFalse(any("subjectaccessreviews" in c[1] for c in api.calls))
 
     def test_existing_car_requires_mixed_profile_for_same_rbac_subject(self):
         api = FakeAPI()
         basic = {
             "id": "basic",
             "backend": "deckhouse",
-            "subjects": [{"kind": "Group", "source": "external", "name": "readers"}],
+            "subjects": [{"kind": "Group", "name": "readers"}],
             "accessLevel": "User",
             "scope": {"namespaces": ["dev"]},
         }

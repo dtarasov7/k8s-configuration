@@ -1,0 +1,11 @@
+---
+k8s_configuration_grants: '{{ (manual_dkp_grants_baseline | rejectattr(''id'', ''equalto'',
+  ''temporary-reader'') | list) + [manual_dkp_absent_grant] }}'
+manual_dkp_absent_grant:
+  id: temporary-reader
+  backend: rbac
+  scope:
+    namespaces:
+    - dkp-access-stage
+  target_name: dkp-access-temporary
+  state: absent

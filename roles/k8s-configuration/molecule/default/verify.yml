@@ -1,5 +1,5 @@
 ---
-- name: Verify live authorization and REST reconciliation
+- name: Verify live authorization and kubectl reconciliation
   hosts: localhost
   gather_facts: false
   tasks:

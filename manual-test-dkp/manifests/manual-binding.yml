@@ -1,0 +1,15 @@
+---
+# Optional unmanaged binding for scoped export and exact UID adoption.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dkp-access-manual-reader
+  namespace: dkp-access-dev
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: view
+subjects:
+- kind: User
+  apiGroup: rbac.authorization.k8s.io
+  name: dkp-access:manual
