@@ -11,10 +11,10 @@ Ansible-роль для управления доступом в vanilla Kuberne
 Переменные можно задать в inventory/group_vars:
 
 ```yaml
-k8s_configuration_report_path: "{{ playbook_dir }}/output/{{ inventory_hostname }}/dry.yml"
-k8s_configuration_export_destination: "{{ playbook_dir }}/output/{{ inventory_hostname }}/export.yml"
-k8s_configuration_export_audit_destination: "{{ playbook_dir }}/output/{{ inventory_hostname }}/export-audit.yml"
-k8s_configuration_matrix_output_dir: "{{ playbook_dir }}/output/{{ inventory_hostname }}"
+k8s_configuration_report_path: '{{ playbook_dir }}/output/{{ inventory_hostname }}/dry.yml'
+k8s_configuration_export_destination: '{{ playbook_dir }}/output/{{ inventory_hostname }}/export.yml'
+k8s_configuration_export_audit_destination: '{{ playbook_dir }}/output/{{ inventory_hostname }}/export-audit.yml'
+k8s_configuration_matrix_output_dir: '{{ playbook_dir }}/output/{{ inventory_hostname }}'
 k8s_configuration_matrix_filename: matrix.csv
 k8s_configuration_matrix_bindings_filename: bindings.csv
 k8s_configuration_matrix_subjects_filename: subjects.csv
@@ -32,13 +32,9 @@ Execution host: Python >=3.8, установленный kubectl, доступ �
 
 После совместного применения `hosts:` и `--limit` должен остаться **ровно один execution host**. В `hosts:` и `--limit` допустимы имена узлов, группы, `all`, списки и шаблоны. Если итоговых узлов несколько, роль завершается ошибкой до запуска kubectl. `serial: 1` не отменяет проверку всего выбранного набора (`ansible_play_hosts_all`). Для проверки до подключения к узлам задайте `gather_facts: false`. Для каждого cluster/owner нужен последовательный CI job: кластерные изменения не транзакционны. Ключи kubeconfig и локальные TLS-файлы должны быть доступны execution host; lookup переменных выполняется на control node.
 
-```yaml
-# inventory.yml
-all:
-  hosts:
-    access_executor:
-      ansible_connection: local
-      ansible_python_interpreter: /usr/bin/python3
+```ini
+[access_executor]
+localhost ansible_connection=local ansible_python_interpreter=/usr/bin/python3
 ```
 
 ```yaml
@@ -51,21 +47,15 @@ all:
     k8s_configuration_config_connection_kubeconfig: /etc/ansible/kubeconfigs/prod.yaml
     k8s_configuration_config_connection_context: prod
     k8s_configuration_config_management_owner: platform
-    k8s_configuration_config_management_namespaces:
-    - development
+    k8s_configuration_config_management_namespaces: [development]
     k8s_configuration_config_management_include_cluster_scoped: false
     k8s_configuration_grants:
     - id: developers
       backend: rbac
       subjects:
-      - kind: Group
-        name: oidc:developers
-      roleRef:
-        kind: ClusterRole
-        name: edit
-      scope:
-        namespaces:
-        - development
+      - {kind: Group, name: 'oidc:developers'}
+      roleRef: {kind: ClusterRole, name: edit}
+      scope: {namespaces: [development]}
   roles:
   - role: k8s-configuration
 ```
@@ -73,8 +63,8 @@ all:
 Из корня проекта:
 
 ```bash
-ANSIBLE_ROLES_PATH=./roles ansible-playbook -i inventory.yml access.yml
-ANSIBLE_ROLES_PATH=./roles ansible-playbook -i inventory.yml access.yml --check --diff
+ANSIBLE_ROLES_PATH=./roles ansible-playbook -i inventory.ini access.yml
+ANSIBLE_ROLES_PATH=./roles ansible-playbook -i inventory.ini access.yml --check --diff
 ```
 
 Режим задаётся через `k8s_configuration_config_mode`: `dry` (по умолчанию), `apply`, `export`, `matrix`.
@@ -85,11 +75,14 @@ ANSIBLE_ROLES_PATH=./roles ansible-playbook -i inventory.yml access.yml --check 
 
 `plan` сохранён как устаревший синоним `dry`. `server_validation` используется только при настоящем apply: dry/check не отправляют даже server-side dryRun. Dry всегда сохраняет план на Ansible controller по k8s_configuration_report_path; при --check запись только прогнозируется.
 
-Роль переименована из `k8s_access_manager`: каталог и ссылка в playbook теперь `k8s-configuration`, модуль — `k8s_configuration`, префикс всех переменных — `k8s_configuration_`. Старые имена переменных нужно заменить. Значения owner, label_domain и алгоритм имён ресурсов сохранены: переименование роли не приводит к потере владения существующими объектами. Galaxy role_name — `k8s_configuration`, поскольку Galaxy не допускает дефис в этом поле.
+## Готовые примеры
+
+- [Минимальный INI-инвентарь](examples/inventory.ini) и [playbook](examples/playbook.yml) для vanilla Kubernetes.
+- [Полный пример Deckhouse](examples/deckhouse/README.md) по структуре manual-test-dkp: INI-инвентарь, group_vars с компактными grants, fixtures, dry/apply, export, matrix, OpenLDAP и отзыв назначений.
+
+В INI задаются узлы и параметры соединения Ansible. Списки subjects, roleRef и scope задаются в YAML group_vars или vars playbook, в компактном формате, как в manual-test-dkp.
 
 ## Переменные роли
-
-Настройки роли — **плоские переменные**. Например, config.schema_version → k8s_configuration_config_schema_version, connection.kubeconfig → k8s_configuration_config_connection_kubeconfig. Задача execute.yml передаёт плоские параметры прямо Python-модулю; внутренние настройки движка собираются в модуле. vars/main.yml отсутствует.
 
 Список `k8s_configuration_grants` намеренно не имеет defaults: пропуск оставляет назначения неуправляемыми, [] — явно пустое желаемое состояние. Параметры `k8s_configuration_users` и `k8s_configuration_groups` удалены; определения учёток следует создавать вне роли. Списки правил, ссылок на объекты и членства также остаются списками объектов.
 
@@ -165,17 +158,13 @@ ansible-playbook -i inventory/hosts.ini playbook.yaml -l localhost
 
 ```yaml
 k8s_configuration_grants:
-  - id: payments
-    backend: deckhouse
-    subjects:
-      - kind: Group
-        name: developers
-    accessLevel: Editor
-    options:
-      allowScale: false
-      portForwarding: false
-    scope:
-      namespaces: [payments]
+- id: payments
+  backend: deckhouse
+  subjects:
+  - {kind: Group, name: developers}
+  accessLevel: Editor
+  options: {allowScale: false, portForwarding: false}
+  scope: {namespaces: [payments]}
 ```
 
 Grant: id/backend/subjects/scope и roleRef для rbac либо accessLevel/options для deckhouse. Дополнительно state и target_name. Имена API-объектов по умолчанию детерминированы: owner/id/kind/namespace и SHA-256. target_name задаёт существующее имя при export/adoption и разрешён только для одного физического target.
@@ -204,16 +193,12 @@ kubectl auth whoami -o yaml
 
 ```yaml
 k8s_configuration_grants:
-  - id: ivan-read
-    backend: rbac
-    subjects:
-      - kind: User
-        name: 'ivan.petrov@example.org'
-    roleRef:
-      kind: ClusterRole
-      name: view
-    scope:
-      namespaces: [development]
+- id: ivan-read
+  backend: rbac
+  subjects:
+  - {kind: User, name: ivan.petrov@example.org}
+  roleRef: {kind: ClusterRole, name: view}
+  scope: {namespaces: [development]}
 ```
 
 Пользователь должен входить через настроенный внешний провайдер; роль создаёт только назначение прав, а не учётную запись AD или объект Deckhouse User.
@@ -238,8 +223,8 @@ k8s_configuration_config_mode: dry
 k8s_configuration_config_connection_kubeconfig: /etc/ansible/dkp.yaml
 k8s_configuration_config_deckhouse_basic_authz: true
 k8s_configuration_config_deckhouse_granular_roles:
-  - name: d8:use:role:viewer
-    scopes: [namespace]
+- name: d8:use:role:viewer
+  scopes: [namespace]
 ```
 
 ### Export
@@ -248,20 +233,13 @@ k8s_configuration_config_deckhouse_granular_roles:
 k8s_configuration_config_mode: export
 k8s_configuration_config_connection_kubeconfig: /etc/ansible/cluster.yaml
 k8s_configuration_export_mode: scoped
-k8s_configuration_export_backends:
-- rbac
-- deckhouse
-k8s_configuration_export_cluster_roles:
-- view
-- edit
+k8s_configuration_export_backends: [rbac, deckhouse]
+k8s_configuration_export_cluster_roles: [view, edit]
 k8s_configuration_export_roles:
 - namespace: development
   name: custom-reader
-k8s_configuration_export_access_levels:
-- User
-- Editor
-k8s_configuration_export_namespaces:
-- development
+k8s_configuration_export_access_levels: [User, Editor]
+k8s_configuration_export_namespaces: [development]
 k8s_configuration_export_include_cluster_scoped: false
 k8s_configuration_export_exclude_controller_generated: true
 k8s_configuration_export_destination: ./exports/cluster.yaml
@@ -272,23 +250,17 @@ Defaults export: mode managed; backends оба; cluster_roles/roles/access_level
 В `destination` записываются непосредственно три переменные — без служебной обёртки:
 
 ```yaml
-k8s_configuration_users: []
-k8s_configuration_groups: []
 k8s_configuration_grants:
-  - id: export-0123456789abcdef
-    target_name: existing-readers
-    backend: rbac
-    subjects:
-      - kind: Group
-        name: readers
-    roleRef:
-      kind: ClusterRole
-      name: view
-    scope:
-      namespaces: [development]
+- id: export-0123456789abcdef
+  target_name: existing-readers
+  backend: rbac
+  subjects:
+  - {kind: Group, name: readers}
+  roleRef: {kind: ClusterRole, name: view}
+  scope: {namespaces: [development]}
 ```
 
-Файл можно без изменения содержимого подключить через `vars_files: [./exports/cluster.yaml]`, положить в group_vars либо вставить в inventory в раздел vars. `k8s_configuration_config` задаётся отдельно: kubeconfig, Deckhouse profile и owner относятся к целевой среде. Namespace, Role/ClusterRole и ServiceAccount должны существовать на целевом кластере, роль не переносит их определения.
+Файл можно без изменения содержимого подключить через `vars_files: [./exports/cluster.yaml]`, положить в group_vars или использовать в vars playbook. Плоские `k8s_configuration_config_*` задаются отдельно: kubeconfig, Deckhouse profile и owner относятся к целевой среде. Namespace, Role/ClusterRole и ServiceAccount должны существовать на целевом кластере, роль не переносит их определения.
 
 Опциональный `audit_destination: ./exports/cluster-audit.yaml` сохраняет отдельный отчёт с UID, ownership, unsupported_fields, importable и очищенными snapshot. Аудит не попадает в импортируемый файл. По умолчанию неподдерживаемые выбранные объекты (например, additionalRoles, TTL или непредставимые зависимости) блокируют экспорт до записи файла. `allow_partial: true` явно разрешает неполный снимок для разбора вместе с аудитом; для переноса его полнота не гарантируется.
 
@@ -327,14 +299,14 @@ GET-списки читаются полностью. Перед apply пере�
 
 Исполнителю нужны get/list выбранных ресурсов, Namespace, referenced Role/ClusterRole; create/patch/delete для apply, а также назначаемые права или bind согласно Kubernetes. Deckhouse дополнительно требует get Module, ModuleConfig и CRD; дополнительные probes могут требовать get Deployment. Матрица требует get/list User/Group. Для полноты проверки ссылок списки authorization-ресурсов читаются по всему кластеру даже при ограниченном management.namespaces. Ошибка 403 блокирует планирование. Роль не выдаёт себе cluster-admin; её binding и аварийные назначения следует включить в protected_objects.
 
-Теги: pre-req, install, user, ssl, config. `clean` запускается только явно (`--tags clean`), завершает play; постоянные сервисы/локальные пользователи роль не создаёт, TLS-файлы, временные манифесты и отдельный discovery cache kubectl убирает модуль. Отчёты и кластерные права через clean не удаляются. Для записи report/export используйте существующий приватный каталог; copy записывает атомарно с mode 0600.
+Теги: pre-req, install, ssl, config. Постоянные сервисы и локальные пользователи роль не создаёт. TLS-файлы, временные манифесты и отдельный discovery cache kubectl удаляет модуль. Отзыв назначений задаётся через state: absent или prune; отдельной задачи clean нет. Для записи report/export используйте существующий приватный каталог; copy записывает атомарно с mode 0600.
 
 ## Проверки
 
 ```bash
 python3 -m unittest discover -s roles/k8s-configuration/tests/unit -v
 python3 -m unittest discover -s roles/k8s-configuration/tests/integration -v
-ANSIBLE_ROLES_PATH=./roles ansible-playbook -i roles/k8s-configuration/examples/inventory.yml roles/k8s-configuration/examples/playbook.yml --syntax-check
+ANSIBLE_ROLES_PATH=./roles ansible-playbook -i roles/k8s-configuration/examples/inventory.ini roles/k8s-configuration/examples/playbook.yml --syntax-check
 ```
 
 Unit suite включает настоящий kubectl, локальный HTTPS-сервер и openssl; integration suite запускает Ansible против него. Эти тесты проверяют транспорт и упаковку, но не заменяют контроллеры Deckhouse.
@@ -367,7 +339,7 @@ k8s_configuration_config_mode: matrix
 k8s_configuration_config_platform: vanilla
 k8s_configuration_config_connection_kubeconfig: /etc/ansible/cluster.yaml
 k8s_configuration_config_connection_context: prod
-k8s_configuration_matrix_output_dir: "{{ playbook_dir }}/output/{{ inventory_hostname }}"
+k8s_configuration_matrix_output_dir: '{{ playbook_dir }}/output/{{ inventory_hostname }}'
 k8s_configuration_matrix_source: cluster
 k8s_configuration_matrix_scope: cluster
 k8s_configuration_matrix_namespaces: []
@@ -476,10 +448,10 @@ k8s_configuration_matrix_include_cluster_scoped: false
 Только пользователи организации в namespace проектов:
 
 ```yaml
-k8s_configuration_matrix_namespace_include: ['project-*']
-k8s_configuration_matrix_namespace_exclude: ['project-archive']
+k8s_configuration_matrix_namespace_include: [project-*]
+k8s_configuration_matrix_namespace_exclude: [project-archive]
 k8s_configuration_matrix_users_include: ['*@example.org']
-k8s_configuration_matrix_users_exclude: ['bot-*']
+k8s_configuration_matrix_users_exclude: [bot-*]
 k8s_configuration_matrix_subjects_groups: false
 ```
 

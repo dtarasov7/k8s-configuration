@@ -1,5 +1,11 @@
 # История изменений
 
+## 2.9.1 — 6 ноября 2026 года
+
+- Примеры README приведены к компактному YAML, примеры inventory — к INI. В README-en добавлены английские пояснения всех 83 переменных. Исправлены устаревшие examples subjects.source и пример экспорта users/groups.
+- Добавлен самостоятельный examples/deckhouse по образцу manual-test-dkp: INI, group_vars, fixtures и сценарии dry/apply, export, matrix, OpenLDAP и отзыва прав.
+- Удалены tasks/clean.yml и tasks/user.yml, их импорты и теги. Временные файлы по-прежнему удаляет модуль; отзыв прав задаётся через state: absent/prune.
+
 ## 2.9.0 — 3 ноября 2026 года
 
 - Удалено управление локальными User/Group: создание, изменение, пароли, состав групп и удаление. Удалены параметры users/groups, password_updates, prune_identities, настройки API-версий User/Group и ready_checks_user_authn. Матрица продолжает читать User/Group, назначения используют существующих субъектов. Обновлены ручные inventory, документация и тесты.

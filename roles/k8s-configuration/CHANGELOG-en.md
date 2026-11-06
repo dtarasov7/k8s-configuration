@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.9.1 — 2026-11-06
+
+- Converted README examples to compact YAML and INI inventory; added English descriptions for all 83 variables. Removed stale subjects.source and users/groups export examples.
+- Added standalone examples/deckhouse modeled after manual-test-dkp, with INI inventory, group_vars, fixtures and dry/apply, export, matrix, OpenLDAP and revocation scenarios.
+- Removed tasks/clean.yml and tasks/user.yml, including imports and tags. The module still removes temporary files; assignment revocation uses state: absent/prune.
+
 ## 2.9.0 — 2026-11-03
 
 - Removed local User/Group lifecycle management, passwords and membership updates. Removed users/groups, password_updates, prune_identities, User/Group API version settings and ready_checks_user_authn. Matrices retain read-only identity discovery; grants reference existing subjects. Updated manual inventories, documentation and tests.

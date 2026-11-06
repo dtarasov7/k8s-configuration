@@ -1,0 +1,447 @@
+# Test fixtures: namespaces, roles, local Deckhouse identities. Password for all local users: 12121212.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dkp-access-dev
+  labels:
+    purpose: k8s-configuration-manual-dkp
+    project: access-test
+    environment: dev
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dkp-access-stage
+  labels:
+    purpose: k8s-configuration-manual-dkp
+    project: access-test
+    environment: stage
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dkp-access-outside
+  labels:
+    purpose: k8s-configuration-manual-dkp
+    project: other-project
+    environment: outside
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: read-bot
+  namespace: dkp-access-dev
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: deploy-bot
+  namespace: dkp-access-dev
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dkp-access-pod-logs
+  namespace: dkp-access-dev
+rules:
+- apiGroups:
+  - ''
+  resources:
+  - pods
+  - pods/log
+  verbs:
+  - get
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dkp-access-named-config
+  namespace: dkp-access-stage
+rules:
+- apiGroups:
+  - ''
+  resources:
+  - configmaps
+  verbs:
+  - get
+  resourceNames:
+  - public-config
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dkp-access-deployer
+  namespace: dkp-access-dev
+rules:
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: dkp-access-node-reader
+  labels:
+    purpose: k8s-configuration-manual-dkp
+rules:
+- apiGroups:
+  - ''
+  resources:
+  - nodes
+  verbs:
+  - get
+  - list
+  - watch
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: public-config
+  namespace: dkp-access-stage
+data:
+  message: Non-secret access test fixture
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: private-config
+  namespace: dkp-access-stage
+data:
+  message: Non-secret access test fixture
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scale-target
+  namespace: dkp-access-dev
+spec:
+  replicas: 0
+  selector:
+    matchLabels:
+      app: dkp-access-scale-target
+  template:
+    metadata:
+      labels:
+        app: dkp-access-scale-target
+    spec:
+      automountServiceAccountToken: false
+      containers:
+      - name: pause
+        image: registry.k8s.io/pause:3.10
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dkp-access-secret-reader
+  namespace: dkp-access-stage
+rules:
+- apiGroups:
+  - ''
+  resources:
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ''
+  resources:
+  - pods/exec
+  verbs:
+  - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dkp-access-scaler
+  namespace: dkp-access-dev
+rules:
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - get
+- apiGroups:
+  - apps
+  resources:
+  - deployments/scale
+  verbs:
+  - get
+  - patch
+  - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dkp-access-forwarder
+  namespace: dkp-access-dev
+rules:
+- apiGroups:
+  - ''
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - ''
+  resources:
+  - pods/portforward
+  verbs:
+  - get
+  - create
+---
+apiVersion: deckhouse.io/v1
+kind: User
+metadata:
+  name: dkp-access-alice
+  labels:
+    purpose: k8s-configuration-manual-dkp
+  annotations:
+    user-authz.deckhouse.io/allow-authorization-rule-collision: 'true'
+spec:
+  email: dkp-access-alice@example.invalid
+  password: JDJ5JDEyJG05T3JRYkFIdVRDb3huN3NYN3E0QWVydG5YQVc0NWxqUFdpNVcuUUtjaGxRMEluT2tmMGZx
+---
+apiVersion: deckhouse.io/v1
+kind: User
+metadata:
+  name: dkp-access-bob
+  labels:
+    purpose: k8s-configuration-manual-dkp
+  annotations:
+    user-authz.deckhouse.io/allow-authorization-rule-collision: 'true'
+spec:
+  email: dkp-access-bob@example.invalid
+  password: JDJ5JDEyJG05T3JRYkFIdVRDb3huN3NYN3E0QWVydG5YQVc0NWxqUFdpNVcuUUtjaGxRMEluT2tmMGZx
+---
+apiVersion: deckhouse.io/v1
+kind: User
+metadata:
+  name: dkp-access-auditor
+  labels:
+    purpose: k8s-configuration-manual-dkp
+  annotations:
+    user-authz.deckhouse.io/allow-authorization-rule-collision: 'true'
+spec:
+  email: dkp-access-auditor@example.invalid
+  password: JDJ5JDEyJG05T3JRYkFIdVRDb3huN3NYN3E0QWVydG5YQVc0NWxqUFdpNVcuUUtjaGxRMEluT2tmMGZx
+---
+apiVersion: deckhouse.io/v1
+kind: User
+metadata:
+  name: dkp-access-privileged
+  labels:
+    purpose: k8s-configuration-manual-dkp
+  annotations:
+    user-authz.deckhouse.io/allow-authorization-rule-collision: 'true'
+spec:
+  email: dkp-access-privileged@example.invalid
+  password: JDJ5JDEyJG05T3JRYkFIdVRDb3huN3NYN3E0QWVydG5YQVc0NWxqUFdpNVcuUUtjaGxRMEluT2tmMGZx
+---
+apiVersion: deckhouse.io/v1
+kind: User
+metadata:
+  name: dkp-access-selector
+  labels:
+    purpose: k8s-configuration-manual-dkp
+  annotations:
+    user-authz.deckhouse.io/allow-authorization-rule-collision: 'true'
+spec:
+  email: dkp-access-selector@example.invalid
+  password: JDJ5JDEyJG05T3JRYkFIdVRDb3huN3NYN3E0QWVydG5YQVc0NWxqUFdpNVcuUUtjaGxRMEluT2tmMGZx
+---
+apiVersion: deckhouse.io/v1
+kind: User
+metadata:
+  name: dkp-access-scaler
+  labels:
+    purpose: k8s-configuration-manual-dkp
+  annotations:
+    user-authz.deckhouse.io/allow-authorization-rule-collision: 'true'
+spec:
+  email: dkp-access-scaler@example.invalid
+  password: JDJ5JDEyJG05T3JRYkFIdVRDb3huN3NYN3E0QWVydG5YQVc0NWxqUFdpNVcuUUtjaGxRMEluT2tmMGZx
+---
+apiVersion: deckhouse.io/v1
+kind: User
+metadata:
+  name: dkp-access-forwarder
+  labels:
+    purpose: k8s-configuration-manual-dkp
+  annotations:
+    user-authz.deckhouse.io/allow-authorization-rule-collision: 'true'
+spec:
+  email: dkp-access-forwarder@example.invalid
+  password: JDJ5JDEyJG05T3JRYkFIdVRDb3huN3NYN3E0QWVydG5YQVc0NWxqUFdpNVcuUUtjaGxRMEluT2tmMGZx
+---
+apiVersion: deckhouse.io/v1
+kind: User
+metadata:
+  name: dkp-access-admin
+  labels:
+    purpose: k8s-configuration-manual-dkp
+  annotations:
+    user-authz.deckhouse.io/allow-authorization-rule-collision: 'true'
+spec:
+  email: dkp-access-admin@example.invalid
+  password: JDJ5JDEyJG05T3JRYkFIdVRDb3huN3NYN3E0QWVydG5YQVc0NWxqUFdpNVcuUUtjaGxRMEluT2tmMGZx
+---
+apiVersion: deckhouse.io/v1
+kind: User
+metadata:
+  name: dkp-access-temporary
+  labels:
+    purpose: k8s-configuration-manual-dkp
+  annotations:
+    user-authz.deckhouse.io/allow-authorization-rule-collision: 'true'
+spec:
+  email: dkp-access-temporary@example.invalid
+  password: JDJ5JDEyJG05T3JRYkFIdVRDb3huN3NYN3E0QWVydG5YQVc0NWxqUFdpNVcuUUtjaGxRMEluT2tmMGZx
+---
+apiVersion: deckhouse.io/v1
+kind: User
+metadata:
+  name: dkp-access-standalone
+  labels:
+    purpose: k8s-configuration-manual-dkp
+  annotations:
+    user-authz.deckhouse.io/allow-authorization-rule-collision: 'true'
+spec:
+  email: dkp-access-standalone@example.invalid
+  password: JDJ5JDEyJG05T3JRYkFIdVRDb3huN3NYN3E0QWVydG5YQVc0NWxqUFdpNVcuUUtjaGxRMEluT2tmMGZx
+---
+apiVersion: deckhouse.io/v1
+kind: User
+metadata:
+  name: dkp-access-basic-viewer
+  labels:
+    purpose: k8s-configuration-manual-dkp
+  annotations:
+    user-authz.deckhouse.io/allow-authorization-rule-collision: 'true'
+spec:
+  email: dkp-access-basic-viewer@example.invalid
+  password: JDJ5JDEyJG05T3JRYkFIdVRDb3huN3NYN3E0QWVydG5YQVc0NWxqUFdpNVcuUUtjaGxRMEluT2tmMGZx
+---
+apiVersion: deckhouse.io/v1
+kind: User
+metadata:
+  name: dkp-access-basic-privileged
+  labels:
+    purpose: k8s-configuration-manual-dkp
+  annotations:
+    user-authz.deckhouse.io/allow-authorization-rule-collision: 'true'
+spec:
+  email: dkp-access-basic-privileged@example.invalid
+  password: JDJ5JDEyJG05T3JRYkFIdVRDb3huN3NYN3E0QWVydG5YQVc0NWxqUFdpNVcuUUtjaGxRMEluT2tmMGZx
+---
+apiVersion: deckhouse.io/v1
+kind: User
+metadata:
+  name: dkp-access-basic-editor
+  labels:
+    purpose: k8s-configuration-manual-dkp
+  annotations:
+    user-authz.deckhouse.io/allow-authorization-rule-collision: 'true'
+spec:
+  email: dkp-access-basic-editor@example.invalid
+  password: JDJ5JDEyJG05T3JRYkFIdVRDb3huN3NYN3E0QWVydG5YQVc0NWxqUFdpNVcuUUtjaGxRMEluT2tmMGZx
+---
+apiVersion: deckhouse.io/v1
+kind: User
+metadata:
+  name: dkp-access-basic-admin
+  labels:
+    purpose: k8s-configuration-manual-dkp
+  annotations:
+    user-authz.deckhouse.io/allow-authorization-rule-collision: 'true'
+spec:
+  email: dkp-access-basic-admin@example.invalid
+  password: JDJ5JDEyJG05T3JRYkFIdVRDb3huN3NYN3E0QWVydG5YQVc0NWxqUFdpNVcuUUtjaGxRMEluT2tmMGZx
+---
+apiVersion: deckhouse.io/v1
+kind: User
+metadata:
+  name: dkp-access-basic-scaler
+  labels:
+    purpose: k8s-configuration-manual-dkp
+  annotations:
+    user-authz.deckhouse.io/allow-authorization-rule-collision: 'true'
+spec:
+  email: dkp-access-basic-scaler@example.invalid
+  password: JDJ5JDEyJG05T3JRYkFIdVRDb3huN3NYN3E0QWVydG5YQVc0NWxqUFdpNVcuUUtjaGxRMEluT2tmMGZx
+---
+apiVersion: deckhouse.io/v1
+kind: User
+metadata:
+  name: dkp-access-basic-forwarder
+  labels:
+    purpose: k8s-configuration-manual-dkp
+  annotations:
+    user-authz.deckhouse.io/allow-authorization-rule-collision: 'true'
+spec:
+  email: dkp-access-basic-forwarder@example.invalid
+  password: JDJ5JDEyJG05T3JRYkFIdVRDb3huN3NYN3E0QWVydG5YQVc0NWxqUFdpNVcuUUtjaGxRMEluT2tmMGZx
+---
+apiVersion: deckhouse.io/v1alpha1
+kind: Group
+metadata:
+  name: dkp-access-readers
+  labels:
+    purpose: k8s-configuration-manual-dkp
+spec:
+  name: dkp-access:readers
+  members:
+  - kind: User
+    name: dkp-access-alice
+---
+apiVersion: deckhouse.io/v1alpha1
+kind: Group
+metadata:
+  name: dkp-access-editors
+  labels:
+    purpose: k8s-configuration-manual-dkp
+spec:
+  name: dkp-access:editors
+  members:
+  - kind: User
+    name: dkp-access-bob
+---
+apiVersion: deckhouse.io/v1alpha1
+kind: Group
+metadata:
+  name: dkp-access-unused
+  labels:
+    purpose: k8s-configuration-manual-dkp
+spec:
+  name: dkp-access:unused
+  members:
+  - kind: User
+    name: dkp-access-standalone
+---
+apiVersion: deckhouse.io/v1alpha1
+kind: Group
+metadata:
+  name: dkp-access-basic-readers
+  labels:
+    purpose: k8s-configuration-manual-dkp
+spec:
+  name: dkp-access:basic-readers
+  members:
+  - kind: User
+    name: dkp-access-basic-viewer

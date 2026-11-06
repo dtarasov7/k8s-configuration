@@ -1,0 +1,32 @@
+---
+# Копируйте вне репозитория, замените bindPW паролем cn=vault.
+# Обычный LDAP без TLS допустим только для изолированного тестового стенда.
+apiVersion: deckhouse.io/v1
+kind: DexProvider
+metadata:
+  name: openldap-redos8
+spec:
+  type: LDAP
+  displayName: OpenLDAP redos8
+  ldap:
+    # Если redos8 не разрешается из Dex pod, укажите доступный IP redos8:389.
+    host: redos8:389
+    insecureNoSSL: true
+    startTLS: false
+    bindDN: cn=vault,ou=service,dc=example,dc=org
+    bindPW: REPLACE_WITH_VAULT_LDAP_BIND_PASSWORD
+    usernamePrompt: LDAP uid (alice, bob, carol, dave)
+    userSearch:
+      baseDN: ou=people,dc=example,dc=org
+      filter: '(objectClass=inetOrgPerson)'
+      username: uid
+      idAttr: DN
+      emailAttr: uid
+      nameAttr: cn
+    groupSearch:
+      baseDN: ou=groups,dc=example,dc=org
+      filter: '(objectClass=groupOfNames)'
+      userMatchers:
+      - userAttr: DN
+        groupAttr: member
+      nameAttr: cn

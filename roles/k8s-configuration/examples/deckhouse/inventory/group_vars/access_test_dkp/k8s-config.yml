@@ -1,0 +1,187 @@
+---
+# Deckhouse CE/OSS 1.73.4: fixture identities and roles are provisioned with kubectl.
+# Subject names are literal Kubernetes usernames/group claims, including local fixture identities.
+# LDAP names below are fictional; bindings reference claims without creating LDAP identities.
+ansible_become: true
+example_dkp_mode: dry
+example_dkp_kubeconfig: /etc/kubernetes/admin.conf
+example_dkp_kubectl: kubectl
+example_dkp_basic_authz: false
+example_dkp_prune: false
+example_dkp_allow_empty: false
+example_dkp_allow_replacement: false
+example_dkp_adoption: []
+example_dkp_namespaces:
+- dkp-access-dev
+- dkp-access-stage
+example_dkp_max_deletions: 60
+k8s_configuration_config_schema_version: 1
+k8s_configuration_config_mode: '{{ example_dkp_mode }}'
+k8s_configuration_config_platform: deckhouse
+k8s_configuration_config_connection_kubectl: '{{ example_dkp_kubectl }}'
+k8s_configuration_config_connection_kubeconfig: '{{ example_dkp_kubeconfig }}'
+k8s_configuration_config_connection_validate_tls: true
+k8s_configuration_config_connection_timeout_seconds: 30
+k8s_configuration_config_deckhouse_basic_authz: '{{ (example_dkp_basic_authz | bool) or example_dkp_mode == ''export'' }}'
+k8s_configuration_config_deckhouse_api_versions_authorization_rule: deckhouse.io/v1alpha1
+k8s_configuration_config_deckhouse_api_versions_cluster_authorization_rule: deckhouse.io/v1
+k8s_configuration_config_deckhouse_mixed_backends: true
+k8s_configuration_config_deckhouse_ready_checks_user_authz: []
+k8s_configuration_config_deckhouse_granular_roles:
+- name: d8:use:role:viewer
+  scopes:
+  - namespace
+k8s_configuration_config_management_owner: example-dkp-1734-access-test
+k8s_configuration_config_management_namespaces: '{{ example_dkp_namespaces }}'
+k8s_configuration_config_management_include_cluster_scoped: true
+k8s_configuration_config_management_prune: '{{ example_dkp_prune | bool }}'
+k8s_configuration_config_management_adoption: '{{ example_dkp_adoption }}'
+k8s_configuration_config_safety_max_deletions: '{{ example_dkp_max_deletions }}'
+k8s_configuration_config_safety_allow_empty_desired: '{{ example_dkp_allow_empty | bool }}'
+k8s_configuration_config_safety_allow_binding_replacement: '{{ example_dkp_allow_replacement | bool }}'
+k8s_configuration_config_wait_timeout_seconds: 180
+k8s_configuration_grants: '{{ example_dkp_grants_baseline }}'
+k8s_configuration_export_mode: '{{ example_dkp_export_scope | default(''managed'') }}'
+k8s_configuration_export_backends:
+- deckhouse
+- rbac
+k8s_configuration_export_access_levels:
+- User
+- PrivilegedUser
+- Editor
+- Admin
+k8s_configuration_export_cluster_roles:
+- view
+- edit
+- admin
+- dkp-access-node-reader
+k8s_configuration_export_roles:
+- namespace: dkp-access-dev
+  name: dkp-access-pod-logs
+- namespace: dkp-access-stage
+  name: dkp-access-named-config
+- namespace: dkp-access-dev
+  name: dkp-access-deployer
+- namespace: dkp-access-stage
+  name: dkp-access-secret-reader
+- namespace: dkp-access-dev
+  name: dkp-access-scaler
+- namespace: dkp-access-dev
+  name: dkp-access-forwarder
+k8s_configuration_export_namespaces:
+- dkp-access-dev
+- dkp-access-stage
+k8s_configuration_export_include_cluster_scoped: '{{ example_dkp_export_cluster_scoped | default(true) | bool }}'
+k8s_configuration_export_allow_partial: false
+k8s_configuration_export_destination: '{{ playbook_dir }}/output/{{ inventory_hostname }}/export.yml'
+k8s_configuration_export_audit_destination: '{{ playbook_dir }}/output/{{ inventory_hostname }}/export-audit.yml'
+example_dkp_grants_baseline:
+- id: group-readers
+  backend: rbac
+  subjects:
+  - {kind: Group, name: 'dkp-access:readers'}
+  roleRef: {kind: ClusterRole, name: view}
+  scope: {namespaces: [dkp-access-dev, dkp-access-stage]}
+- id: group-readers-2
+  backend: rbac
+  subjects:
+  - {kind: Group, name: 'dkp-access-2:readers'}
+  roleRef: {kind: ClusterRole, name: view}
+  scope: {namespaces: [dkp-access-dev]}
+- id: group-editors
+  backend: rbac
+  subjects:
+  - {kind: Group, name: 'dkp-access:editors'}
+  roleRef: {kind: ClusterRole, name: edit}
+  scope: {namespaces: [dkp-access-dev]}
+- id: audit-logs
+  backend: rbac
+  subjects:
+  - {kind: User, name: dkp-access-auditor@example.invalid}
+  roleRef: {kind: Role, name: dkp-access-pod-logs}
+  scope: {namespaces: [dkp-access-dev]}
+- id: privileged-stage
+  backend: rbac
+  subjects:
+  - {kind: User, name: dkp-access-privileged@example.invalid}
+  roleRef: {kind: Role, name: dkp-access-secret-reader}
+  scope: {namespaces: [dkp-access-stage]}
+- id: selector-reader
+  backend: rbac
+  subjects:
+  - {kind: User, name: dkp-access-selector@example.invalid}
+  roleRef: {kind: ClusterRole, name: view}
+  scope: {namespaces: [dkp-access-dev, dkp-access-stage]}
+- id: scale-only
+  backend: rbac
+  subjects:
+  - {kind: User, name: dkp-access-scaler@example.invalid}
+  roleRef: {kind: Role, name: dkp-access-scaler}
+  scope: {namespaces: [dkp-access-dev]}
+- id: forward-only
+  backend: rbac
+  subjects:
+  - {kind: User, name: dkp-access-forwarder@example.invalid}
+  roleRef: {kind: Role, name: dkp-access-forwarder}
+  scope: {namespaces: [dkp-access-dev]}
+- id: namespace-admin
+  backend: rbac
+  subjects:
+  - {kind: User, name: dkp-access-admin@example.invalid}
+  roleRef: {kind: ClusterRole, name: admin}
+  scope: {namespaces: [dkp-access-stage]}
+- id: temporary-reader
+  backend: rbac
+  subjects:
+  - {kind: User, name: dkp-access-temporary@example.invalid}
+  roleRef: {kind: ClusterRole, name: view}
+  scope: {namespaces: [dkp-access-stage]}
+  target_name: dkp-access-temporary
+- id: ldap-user-reader
+  backend: rbac
+  subjects:
+  - {kind: User, name: ldap-test-reader@example.invalid}
+  roleRef: {kind: ClusterRole, name: view}
+  scope: {namespaces: [dkp-access-dev]}
+- id: ldap-group-readers
+  backend: rbac
+  subjects:
+  - {kind: Group, name: 'ldap:dkp-access:readers'}
+  roleRef: {kind: ClusterRole, name: view}
+  scope: {namespaces: [dkp-access-dev, dkp-access-stage]}
+- id: ldap-group-deployers
+  backend: rbac
+  subjects:
+  - {kind: Group, name: 'ldap:dkp-access:deployers'}
+  roleRef: {kind: Role, name: dkp-access-deployer}
+  scope: {namespaces: [dkp-access-dev]}
+- id: ldap-user-config
+  backend: rbac
+  subjects:
+  - {kind: User, name: ldap-test-auditor@example.invalid}
+  roleRef: {kind: Role, name: dkp-access-named-config}
+  scope: {namespaces: [dkp-access-stage]}
+- id: cluster-node-readers
+  backend: rbac
+  subjects:
+  - {kind: Group, name: 'ldap:dkp-access:node-readers'}
+  roleRef: {kind: ClusterRole, name: dkp-access-node-reader}
+  scope: {cluster: true}
+k8s_configuration_report_path: '{{ playbook_dir }}/output/{{ inventory_hostname }}/dry.yml'
+k8s_configuration_matrix_output_dir: '{{ playbook_dir }}/output/{{ inventory_hostname }}'
+k8s_configuration_matrix_source: cluster
+k8s_configuration_matrix_filename: "{{ 'matrix-inventory.csv' if k8s_configuration_matrix_source == 'inventory' else 'matrix.csv' }}"
+k8s_configuration_matrix_bindings_filename: "{{ 'bindings-inventory.csv' if k8s_configuration_matrix_source == 'inventory' else 'bindings.csv' }}"
+k8s_configuration_matrix_subjects_filename: "{{ 'subjects-inventory.csv' if k8s_configuration_matrix_source == 'inventory' else 'subjects.csv' }}"
+k8s_configuration_matrix_namespace_mode: application
+k8s_configuration_matrix_namespace_include: []
+k8s_configuration_matrix_namespace_exclude: []
+k8s_configuration_matrix_include_system_subjects: false
+k8s_configuration_matrix_subjects_service_accounts: false
+k8s_configuration_matrix_users_include: []
+k8s_configuration_matrix_users_exclude: []
+k8s_configuration_matrix_groups_include: []
+k8s_configuration_matrix_groups_exclude: []
+k8s_configuration_matrix_omit_empty_rows: true
+k8s_configuration_matrix_exclude_broad_subjects: true
+k8s_configuration_matrix_include_external_users: false

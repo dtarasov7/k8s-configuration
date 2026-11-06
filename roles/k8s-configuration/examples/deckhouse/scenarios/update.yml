@@ -1,0 +1,15 @@
+---
+example_dkp_updated_grant:
+  id: audit-logs
+  backend: rbac
+  subjects:
+  - kind: User
+    name: dkp-access-standalone@example.invalid
+  roleRef:
+    kind: Role
+    name: dkp-access-pod-logs
+  scope:
+    namespaces:
+    - dkp-access-dev
+k8s_configuration_grants: '{{ (example_dkp_grants_baseline | rejectattr(''id'',''equalto'',''audit-logs'')
+  | list) + [example_dkp_updated_grant] }}'

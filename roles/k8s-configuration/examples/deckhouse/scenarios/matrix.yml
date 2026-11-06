@@ -1,0 +1,9 @@
+---
+example_dkp_mode: matrix
+k8s_configuration_matrix_scope: cluster
+k8s_configuration_matrix_namespaces: '{{ example_dkp_matrix_namespaces | default([]) }}'
+k8s_configuration_matrix_include_cluster_scoped: true
+k8s_configuration_matrix_resolve_group_membership: true
+k8s_configuration_matrix_system_subjects:
+  - 'system:*'
+  - 'd8-monitoring:scraper'

@@ -1,5 +1,14 @@
 # Проверки реализации
 
+## README, примеры и удаление задач user/clean — 6 ноября 2026 года
+
+- PASS: 6 тестов test_flat_settings.py; проверка шаблонизации настроек включает новый examples/deckhouse и все его 9 сценариев.
+- PASS: syntax-check examples/playbook.yml с examples/inventory.ini и examples/deckhouse/playbook.yml с inventory/hosts.ini. Относительный путь новой роли разрешается без ANSIBLE_ROLES_PATH.
+- PASS: baseline → повторный apply → OpenLDAP → точечный отзыв → cleanup на FakeAPI; User/Group и определения Role/ClusterRole сохранены, собственные bindings удалены.
+- PASS: --list-tags показывает always/config/install/pre-req/ssl, без user/clean.
+- PASS: все 83 defaults имеют пояснения в обеих таблицах README; английские описания не содержат кириллицы. Примеры YAML, синтаксис shell-команд, INI-блоки, UTF-8/LF проверены.
+- Реальный кластер не использовался; настройки примера и манифесты к нему не применялись.
+
 ## Удаление управления User/Group — 3 ноября 2026 года
 
 Роль управляет только назначениями доступа. Удалены входные параметры users/groups, формирование и изменение User/Group, пароли, состав групп, удаление identities и связанные настройки. Чтение User/Group сохранено в матрице прав. Предыдущие записи ниже описывают исторические проверки прежнего интерфейса.

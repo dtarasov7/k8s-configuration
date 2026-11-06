@@ -1,0 +1,5 @@
+---
+example_dkp_prune: true
+example_dkp_allow_empty: true
+k8s_configuration_grants: []
+example_dkp_basic_authz: true

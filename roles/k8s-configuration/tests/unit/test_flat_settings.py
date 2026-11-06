@@ -54,7 +54,8 @@ class FlatSettingsTests(unittest.TestCase):
 
     def test_all_manual_settings_and_scenarios_render_and_validate(self):
         defaults = self.load(ROLE / "defaults/main.yml")
-        for folder, group in (("manual-test", "access_test"), ("manual-test-dkp", "access_test_dkp")):
+        for folder, group in (("manual-test", "access_test"), ("manual-test-dkp", "access_test_dkp"),
+                              ("roles/k8s-configuration/examples/deckhouse", "access_test_dkp")):
             root = ROLE.parents[1] / folder
             common = self.load(root / ("inventory/group_vars/%s/k8s-config.yml" % group))
             for scenario in [None] + sorted((root / "scenarios").glob("*.yml")):
